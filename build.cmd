@@ -17,7 +17,6 @@ set "LLVM_EXTRACTED=%TOOLS%\llvm-mingw-20261020-ucrt-x86_64"
 set "LLVM_ZIP=%DOWNLOADS%\%LLVM_ARCHIVE%"
 
 set "SQLITE_VERSION=3.54.1"
-set "SQLITE_CODE=3540100"
 set "SQLITE_SOURCE_ID=555e07ef33f69a0957d24d8e555b702464a131d6f1607f4c3c1e4551e8e6ca76"
 set "SQLITE_ARCHIVE=sqlite-amalgamation-3540100.zip"
 set "SQLITE_URL=https://www.sqlite.org/2026/sqlite-amalgamation-3540100.zip"
@@ -71,7 +70,15 @@ if not exist "%CXX%" (
 set "SQLITE_OBJ=%BUILD%\sqlite3.o"
 set "RSP=%BUILD%\nylon.rsp"
 
- echo [1/2] Compiling SQLite %SQLITE_VERSION%...
+rem Clang response files treat backslashes as escape characters. Convert every
+rem path written to the response file to forward slashes so the build works
+rem from any Windows directory.
+set "ROOT_RSP=%ROOT:\=/%"
+set "SQLITE_DIR_RSP=%SQLITE_DIR:\=/%"
+set "SQLITE_OBJ_RSP=%SQLITE_OBJ:\=/%"
+set "NYLON_EXE_RSP=%BIN:\=/%/nylon.exe"
+
+echo [1/2] Compiling SQLite %SQLITE_VERSION%...
 "%CC%" --target=x86_64-w64-mingw32 -O2 -DNDEBUG -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DQS=0 -DSQLITE_DEFAULT_MEMSTATUS=0 -fstack-protector-strong -ffunction-sections -fdata-sections -mguard=cf -c "%SQLITE_DIR%\sqlite3.c" -o "%SQLITE_OBJ%"
 if errorlevel 1 (
 	echo error: SQLite compilation failed.
@@ -102,14 +109,14 @@ if errorlevel 1 (
 >> "%RSP%" echo -Wl,--dynamicbase
 >> "%RSP%" echo -Wl,--nxcompat
 >> "%RSP%" echo -Wl,--high-entropy-va
->> "%RSP%" echo -I"%ROOT%\src"
->> "%RSP%" echo -I"%SQLITE_DIR%"
-for /r "%ROOT%\src" %%F in (*.cpp) do >> "%RSP%" echo "%%~fF"
->> "%RSP%" echo "%SQLITE_OBJ%"
+>> "%RSP%" echo -I"%ROOT_RSP%/src"
+>> "%RSP%" echo -I"%SQLITE_DIR_RSP%"
+for /r "%ROOT%\src" %%F in (*.cpp) do call :append_rsp_path "%%~fF"
+>> "%RSP%" echo "%SQLITE_OBJ_RSP%"
 >> "%RSP%" echo -o
->> "%RSP%" echo "%BIN%\nylon.exe"
+>> "%RSP%" echo "%NYLON_EXE_RSP%"
 
- echo [2/2] Building Nylon...
+echo [2/2] Building Nylon...
 "%CXX%" @"%RSP%"
 if errorlevel 1 (
 	echo error: Nylon build failed.
@@ -124,6 +131,12 @@ if not exist "%BIN%\nylon.exe" (
 echo.
 echo Build complete: %BIN%\nylon.exe
 echo Run: bin\nylon.exe scan ^<expanded-windows-image^>
+exit /b 0
+
+:append_rsp_path
+set "RSP_PATH=%~1"
+set "RSP_PATH=%RSP_PATH:\=/%"
+>> "%RSP%" echo "%RSP_PATH%"
 exit /b 0
 
 :ensure_llvm
