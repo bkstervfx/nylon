@@ -1,17 +1,26 @@
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 
 #include "database/database.hpp"
 #include "image/image.hpp"
+#include "media/media.hpp"
 #include "platform/win32.hpp"
 #include "registry/registry.hpp"
 
 namespace
 {
+
+struct cli_options_t
+{
+	std::filesystem::path input;
+	std::optional<std::uint32_t> image_index;
+};
 
 void print_error(const nylon::error_t& error)
 {
@@ -21,6 +30,76 @@ void print_error(const nylon::error_t& error)
 		std::cerr << " (" << error.code << ")";
 	}
 	std::cerr << '\n';
+}
+
+void print_usage()
+{
+	std::cout
+		<< "Nylon Windows image auditor\n\n"
+		<< "usage:\n"
+		<< "  nylon.exe scan <expanded-windows-image>\n"
+		<< "  nylon.exe scan <windows.iso> [--index <number>]\n";
+}
+
+nylon::result_t<std::uint32_t> parse_positive_u32(std::wstring_view value)
+{
+	if (value.empty())
+	{
+		return nylon::result_t<std::uint32_t>::failure("Image index cannot be empty");
+	}
+
+	std::uint64_t parsed = 0;
+	for (const wchar_t character : value)
+	{
+		if (character < L'0' || character > L'9')
+		{
+			return nylon::result_t<std::uint32_t>::failure("Image index must be a positive integer");
+		}
+		parsed = parsed * 10U + static_cast<std::uint64_t>(character - L'0');
+		if (parsed > std::numeric_limits<std::uint32_t>::max())
+		{
+			return nylon::result_t<std::uint32_t>::failure("Image index is too large");
+		}
+	}
+
+	if (parsed == 0U)
+	{
+		return nylon::result_t<std::uint32_t>::failure("Image index must be greater than zero");
+	}
+
+	return nylon::result_t<std::uint32_t>::success(static_cast<std::uint32_t>(parsed));
+}
+
+nylon::result_t<cli_options_t> parse_cli(int argc, wchar_t** argv)
+{
+	if (argc != 3 && argc != 5)
+	{
+		return nylon::result_t<cli_options_t>::failure("Invalid command line");
+	}
+	if (std::wstring_view(argv[1]) != L"scan")
+	{
+		return nylon::result_t<cli_options_t>::failure("Unknown command");
+	}
+
+	cli_options_t options;
+	options.input = argv[2];
+
+	if (argc == 5)
+	{
+		if (std::wstring_view(argv[3]) != L"--index")
+		{
+			return nylon::result_t<cli_options_t>::failure("Expected --index before image number");
+		}
+
+		auto index = parse_positive_u32(argv[4]);
+		if (!index.ok())
+		{
+			return nylon::result_t<cli_options_t>::failure(index.error().message, index.error().code);
+		}
+		options.image_index = index.value();
+	}
+
+	return nylon::result_t<cli_options_t>::success(std::move(options));
 }
 
 nylon::result_t<std::filesystem::path> project_root()
@@ -90,14 +169,14 @@ nylon::status_t replace_database(const std::filesystem::path& path)
 
 int wmain(int argc, wchar_t** argv)
 {
-	if (argc != 3 || std::wstring_view(argv[1]) != L"scan")
+	auto cli_result = parse_cli(argc, argv);
+	if (!cli_result.ok())
 	{
-		std::cout
-			<< "Nylon Windows image auditor\n\n"
-			<< "usage:\n"
-			<< "  nylon.exe scan <expanded-windows-image>\n";
+		print_usage();
+		print_error(cli_result.error());
 		return 2;
 	}
+	const auto cli = std::move(cli_result).value();
 
 	auto root_result = project_root();
 	if (!root_result.ok())
@@ -119,6 +198,31 @@ int wmain(int argc, wchar_t** argv)
 		return 1;
 	}
 
+	std::cout << "input...\n";
+	auto prepared_result = nylon::media::prepare(
+		cli.input,
+		nylon::media::prepare_options_t{
+			nylon_root,
+			cache_root,
+			temp_root,
+			cli.image_index
+		});
+	if (!prepared_result.ok())
+	{
+		print_error(prepared_result.error());
+		return 1;
+	}
+	const auto prepared = std::move(prepared_result).value();
+
+	if (prepared.source_kind == "iso")
+	{
+		std::cout << "iso sha256: " << prepared.iso_sha256 << '\n';
+		std::cout << "image index: " << prepared.image_index;
+		if (!prepared.image_name.empty()) std::cout << " (" << prepared.image_name << ")";
+		std::cout << '\n';
+		std::cout << "cache: " << (prepared.cache_hit ? "hit" : "created") << '\n';
+	}
+
 	status = replace_database(database_path);
 	if (!status.ok())
 	{
@@ -126,7 +230,7 @@ int wmain(int argc, wchar_t** argv)
 		return 1;
 	}
 
-	auto image_result = nylon::image::image_t::open(argv[2]);
+	auto image_result = nylon::image::image_t::open(prepared.image_root);
 	if (!image_result.ok())
 	{
 		print_error(image_result.error());
@@ -167,11 +271,46 @@ int wmain(int argc, wchar_t** argv)
 			return 1;
 		}
 	}
+
 	status = database.meta("image_root", image_path.value());
 	if (!status.ok())
 	{
 		print_error(status.error());
 		return 1;
+	}
+	status = database.meta("source_kind", prepared.source_kind);
+	if (!status.ok())
+	{
+		print_error(status.error());
+		return 1;
+	}
+
+	if (prepared.source_kind == "iso")
+	{
+		status = database.meta("source_iso_sha256", prepared.iso_sha256);
+		if (!status.ok())
+		{
+			print_error(status.error());
+			return 1;
+		}
+		status = database.meta("source_image_index", std::to_string(prepared.image_index));
+		if (!status.ok())
+		{
+			print_error(status.error());
+			return 1;
+		}
+		status = database.meta("source_image_name", prepared.image_name);
+		if (!status.ok())
+		{
+			print_error(status.error());
+			return 1;
+		}
+		status = database.meta("source_cache", prepared.cache_hit ? "hit" : "created");
+		if (!status.ok())
+		{
+			print_error(status.error());
+			return 1;
+		}
 	}
 
 	status = database.collector_status("registry", "running");
