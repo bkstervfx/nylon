@@ -7,6 +7,7 @@ set "TOOLS=%ROOT%\tools"
 set "DOWNLOADS=%TOOLS%\downloads"
 set "BUILD=%ROOT%\build"
 set "BIN=%ROOT%\bin"
+set "MEDIA_TOOLS=%TOOLS%\media"
 
 set "LLVM_VERSION=20261020"
 set "LLVM_ARCHIVE=llvm-mingw-20261020-ucrt-x86_64.zip"
@@ -23,6 +24,26 @@ set "SQLITE_URL=https://www.sqlite.org/2026/sqlite-amalgamation-3540100.zip"
 set "SQLITE_ZIP=%DOWNLOADS%\%SQLITE_ARCHIVE%"
 set "SQLITE_DIR=%TOOLS%\sqlite"
 set "SQLITE_EXTRACTED=%TOOLS%\sqlite-amalgamation-3540100"
+
+set "SEVENZIP_VERSION=26.05"
+set "SEVENZIP_BOOTSTRAP=7zr.exe"
+set "SEVENZIP_BOOTSTRAP_URL=https://github.com/ip7z/7zip/releases/download/26.05/7zr.exe"
+set "SEVENZIP_BOOTSTRAP_SHA256=9bf582b894dfa665f852d7e9112b02290a1c303c2d95a21fcdc41ffcb03143b7"
+set "SEVENZIP_INSTALLER=7z2605-x64.exe"
+set "SEVENZIP_INSTALLER_URL=https://github.com/ip7z/7zip/releases/download/26.05/7z2605-x64.exe"
+set "SEVENZIP_INSTALLER_SHA256=fd99e86f57d8f429ef5ed045bf98315af962e2309b0f1ba87a147a44c71647d0"
+set "SEVENZIP_BOOTSTRAP_PATH=%DOWNLOADS%\%SEVENZIP_BOOTSTRAP%"
+set "SEVENZIP_INSTALLER_PATH=%DOWNLOADS%\%SEVENZIP_INSTALLER%"
+set "SEVENZIP_DIR=%MEDIA_TOOLS%\7zip"
+
+set "WIMLIB_VERSION=1.14.5"
+set "WIMLIB_ARCHIVE=wimlib-1.14.5-windows-x86_64-bin.zip"
+set "WIMLIB_URL=https://wimlib.net/downloads/wimlib-1.14.5-windows-x86_64-bin.zip"
+set "WIMLIB_SHA256=2f446d6fa3866582175f1a22a7be198eeee0aec7aba5b4e04ad25c99eae2d265"
+set "WIMLIB_EXE_SHA256=34c0c4165591ad1f592837ed99d08273c58d6ed3fe0ed6360cf34e7b0739b353"
+set "WIMLIB_DLL_SHA256=ba853ee1e3fc5f5798581f02e8e066ba07a0a2375f0bf444fe981431fd508495"
+set "WIMLIB_ZIP=%DOWNLOADS%\%WIMLIB_ARCHIVE%"
+set "WIMLIB_DIR=%MEDIA_TOOLS%\wimlib"
 
 if /I "%~1"=="clean" (
 	if exist "%BUILD%" rmdir /s /q "%BUILD%"
@@ -46,6 +67,7 @@ for %%T in (curl.exe tar.exe certutil.exe) do (
 
 if not exist "%TOOLS%" mkdir "%TOOLS%"
 if not exist "%DOWNLOADS%" mkdir "%DOWNLOADS%"
+if not exist "%MEDIA_TOOLS%" mkdir "%MEDIA_TOOLS%"
 if not exist "%BUILD%" mkdir "%BUILD%"
 if not exist "%BIN%" mkdir "%BIN%"
 
@@ -53,6 +75,12 @@ call :ensure_llvm
 if errorlevel 1 exit /b 1
 
 call :ensure_sqlite
+if errorlevel 1 exit /b 1
+
+call :ensure_7zip
+if errorlevel 1 exit /b 1
+
+call :ensure_wimlib
 if errorlevel 1 exit /b 1
 
 set "CC=%LLVM_DIR%\bin\x86_64-w64-mingw32-clang.exe"
@@ -113,6 +141,7 @@ if errorlevel 1 (
 >> "%RSP%" echo -I"%SQLITE_DIR_RSP%"
 for /r "%ROOT%\src" %%F in (*.cpp) do call :append_rsp_path "%%~fF"
 >> "%RSP%" echo "%SQLITE_OBJ_RSP%"
+>> "%RSP%" echo -lbcrypt
 >> "%RSP%" echo -o
 >> "%RSP%" echo "%NYLON_EXE_RSP%"
 
@@ -130,7 +159,8 @@ if not exist "%BIN%\nylon.exe" (
 
 echo.
 echo Build complete: %BIN%\nylon.exe
-echo Run: bin\nylon.exe scan ^<expanded-windows-image^>
+echo Scan directory: bin\nylon.exe scan ^<expanded-windows-image^>
+echo Scan ISO:       bin\nylon.exe scan ^<windows.iso^> [--index ^<number^>]
 exit /b 0
 
 :append_rsp_path
@@ -139,32 +169,45 @@ set "RSP_PATH=%RSP_PATH:\=/%"
 >> "%RSP%" echo "%RSP_PATH%"
 exit /b 0
 
+:verify_sha256
+certutil.exe -hashfile "%~1" SHA256 | findstr /I /C:"%~2" >nul
+exit /b %ERRORLEVEL%
+
+:download_verified
+set "DV_PATH=%~1"
+set "DV_URL=%~2"
+set "DV_SHA=%~3"
+set "DV_NAME=%~4"
+
+if exist "%DV_PATH%" (
+	call :verify_sha256 "%DV_PATH%" "%DV_SHA%"
+	if not errorlevel 1 exit /b 0
+	del /q "%DV_PATH%" >nul 2>nul
+)
+
+echo Downloading %DV_NAME%...
+curl.exe --fail --location --retry 3 --output "%DV_PATH%.tmp" "%DV_URL%"
+if errorlevel 1 (
+	del /q "%DV_PATH%.tmp" >nul 2>nul
+	echo error: %DV_NAME% download failed.
+	exit /b 1
+)
+move /y "%DV_PATH%.tmp" "%DV_PATH%" >nul
+
+call :verify_sha256 "%DV_PATH%" "%DV_SHA%"
+if errorlevel 1 (
+	echo error: %DV_NAME% SHA-256 verification failed.
+	del /q "%DV_PATH%" >nul 2>nul
+	exit /b 1
+)
+exit /b 0
+
 :ensure_llvm
 if exist "%LLVM_DIR%\bin\x86_64-w64-mingw32-clang++.exe" exit /b 0
 if exist "%LLVM_DIR%\bin\clang++.exe" exit /b 0
 
-if exist "%LLVM_ZIP%" (
-	certutil.exe -hashfile "%LLVM_ZIP%" SHA256 | findstr /I /C:"%LLVM_SHA256%" >nul
-	if errorlevel 1 del /q "%LLVM_ZIP%"
-)
-
-if not exist "%LLVM_ZIP%" (
-	echo Downloading LLVM-MinGW %LLVM_VERSION%...
-	curl.exe --fail --location --retry 3 --output "%LLVM_ZIP%.tmp" "%LLVM_URL%"
-	if errorlevel 1 (
-		del /q "%LLVM_ZIP%.tmp" >nul 2>nul
-		echo error: LLVM-MinGW download failed.
-		exit /b 1
-	)
-	move /y "%LLVM_ZIP%.tmp" "%LLVM_ZIP%" >nul
-)
-
-certutil.exe -hashfile "%LLVM_ZIP%" SHA256 | findstr /I /C:"%LLVM_SHA256%" >nul
-if errorlevel 1 (
-	echo error: LLVM-MinGW SHA-256 verification failed.
-	del /q "%LLVM_ZIP%" >nul 2>nul
-	exit /b 1
-)
+call :download_verified "%LLVM_ZIP%" "%LLVM_URL%" "%LLVM_SHA256%" "LLVM-MinGW %LLVM_VERSION%"
+if errorlevel 1 exit /b 1
 
 if exist "%LLVM_EXTRACTED%" rmdir /s /q "%LLVM_EXTRACTED%"
 if exist "%LLVM_DIR%" rmdir /s /q "%LLVM_DIR%"
@@ -186,7 +229,6 @@ if errorlevel 1 (
 	echo error: Unable to place LLVM-MinGW in tools\llvm-mingw.
 	exit /b 1
 )
-
 exit /b 0
 
 :ensure_sqlite
@@ -233,5 +275,75 @@ if errorlevel 1 (
 	rmdir /s /q "%SQLITE_DIR%"
 	exit /b 1
 )
+exit /b 0
 
+:ensure_7zip
+if exist "%SEVENZIP_DIR%\7z.exe" if exist "%SEVENZIP_DIR%\7z.dll" exit /b 0
+
+call :download_verified "%SEVENZIP_BOOTSTRAP_PATH%" "%SEVENZIP_BOOTSTRAP_URL%" "%SEVENZIP_BOOTSTRAP_SHA256%" "7-Zip bootstrap %SEVENZIP_VERSION%"
+if errorlevel 1 exit /b 1
+call :download_verified "%SEVENZIP_INSTALLER_PATH%" "%SEVENZIP_INSTALLER_URL%" "%SEVENZIP_INSTALLER_SHA256%" "7-Zip x64 %SEVENZIP_VERSION%"
+if errorlevel 1 exit /b 1
+
+if exist "%SEVENZIP_DIR%" rmdir /s /q "%SEVENZIP_DIR%"
+mkdir "%SEVENZIP_DIR%" >nul 2>nul
+
+echo Extracting portable 7-Zip %SEVENZIP_VERSION%...
+"%SEVENZIP_BOOTSTRAP_PATH%" x -y -o"%SEVENZIP_DIR%" "%SEVENZIP_INSTALLER_PATH%" >nul
+if errorlevel 1 (
+	echo error: Portable 7-Zip extraction failed.
+	exit /b 1
+)
+
+if not exist "%SEVENZIP_DIR%\7z.exe" (
+	echo error: Portable 7-Zip archive did not produce 7z.exe.
+	exit /b 1
+)
+if not exist "%SEVENZIP_DIR%\7z.dll" (
+	echo error: Portable 7-Zip archive did not produce 7z.dll.
+	exit /b 1
+)
+exit /b 0
+
+:ensure_wimlib
+if exist "%WIMLIB_DIR%\wimlib-imagex.exe" if exist "%WIMLIB_DIR%\libwim-15.dll" (
+	call :verify_sha256 "%WIMLIB_DIR%\wimlib-imagex.exe" "%WIMLIB_EXE_SHA256%"
+	if not errorlevel 1 (
+		call :verify_sha256 "%WIMLIB_DIR%\libwim-15.dll" "%WIMLIB_DLL_SHA256%"
+		if not errorlevel 1 exit /b 0
+	)
+)
+
+call :download_verified "%WIMLIB_ZIP%" "%WIMLIB_URL%" "%WIMLIB_SHA256%" "wimlib %WIMLIB_VERSION%"
+if errorlevel 1 exit /b 1
+
+if exist "%WIMLIB_DIR%" rmdir /s /q "%WIMLIB_DIR%"
+mkdir "%WIMLIB_DIR%" >nul 2>nul
+
+echo Extracting portable wimlib %WIMLIB_VERSION%...
+tar.exe -xf "%WIMLIB_ZIP%" -C "%WIMLIB_DIR%"
+if errorlevel 1 (
+	echo error: wimlib extraction failed.
+	exit /b 1
+)
+
+if not exist "%WIMLIB_DIR%\wimlib-imagex.exe" (
+	echo error: wimlib archive did not produce wimlib-imagex.exe.
+	exit /b 1
+)
+if not exist "%WIMLIB_DIR%\libwim-15.dll" (
+	echo error: wimlib archive did not produce libwim-15.dll.
+	exit /b 1
+)
+
+call :verify_sha256 "%WIMLIB_DIR%\wimlib-imagex.exe" "%WIMLIB_EXE_SHA256%"
+if errorlevel 1 (
+	echo error: wimlib-imagex.exe SHA-256 verification failed after extraction.
+	exit /b 1
+)
+call :verify_sha256 "%WIMLIB_DIR%\libwim-15.dll" "%WIMLIB_DLL_SHA256%"
+if errorlevel 1 (
+	echo error: libwim-15.dll SHA-256 verification failed after extraction.
+	exit /b 1
+)
 exit /b 0
