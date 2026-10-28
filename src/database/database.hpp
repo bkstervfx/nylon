@@ -8,7 +8,7 @@
 #include <span>
 #include <string_view>
 
-#include <winsqlite3.h>
+#include <sqlite3.h>
 
 #include "../result.hpp"
 
