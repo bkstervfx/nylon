@@ -1,0 +1,25 @@
+name: portable-build
+
+on:
+  push:
+    branches:
+      - work/iso-input-cache
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build with portable LLVM-MinGW toolchain
+        shell: cmd
+        run: build.cmd
+
+      - name: Verify executable
+        shell: cmd
+        run: if not exist bin\nylon.exe exit /b 1
