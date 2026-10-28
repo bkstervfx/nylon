@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <sstream>
@@ -88,11 +89,6 @@ bool equal_ordinal_ignore_case(std::wstring_view left, std::wstring_view right)
 bool has_iso_extension(const std::filesystem::path& path)
 {
 	return equal_ordinal_ignore_case(path.extension().native(), L".iso");
-}
-
-status_t filesystem_failure(std::string message, const std::error_code& error)
-{
-	return status_t::failure(std::move(message), static_cast<std::uint32_t>(error.value()));
 }
 
 result_t<std::filesystem::path> absolute_path(const std::filesystem::path& path)
@@ -1039,10 +1035,6 @@ result_t<prepared_input_t> prepare(
 		install.primary.native(),
 		L"--extract-xml=" + catalog_path.native()
 	};
-	if (install.split)
-	{
-		info_arguments.push_back(L"--ref=" + install.reference_glob.native());
-	}
 
 	auto info_status = run_checked(wimlib, std::move(info_arguments), "wimlib image catalog");
 	if (!info_status.ok())
