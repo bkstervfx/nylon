@@ -3,5 +3,6 @@
 /temp/
 /cache/
 /output/
+/tools/
 /.vs/
 CMakeSettings.json
