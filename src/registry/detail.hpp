@@ -42,7 +42,7 @@ struct ordinal_less_t
 	}
 };
 
-bool equal_ordinal_ignore_case(
+inline bool equal_ordinal_ignore_case(
 	std::wstring_view left,
 	std::wstring_view right)
 {
@@ -80,7 +80,7 @@ result_t<T> read_number(
 	return result_t<T>::success(value);
 }
 
-result_t<std::wstring> decode_utf16(std::span<const std::byte> data)
+inline result_t<std::wstring> decode_utf16(std::span<const std::byte> data)
 {
 	if ((data.size() % sizeof(wchar_t)) != 0)
 	{
@@ -100,7 +100,7 @@ result_t<std::wstring> decode_utf16(std::span<const std::byte> data)
 	return result_t<std::wstring>::success(std::move(result));
 }
 
-result_t<std::wstring> decode_registry_name(
+inline result_t<std::wstring> decode_registry_name(
 	std::span<const std::byte> bytes,
 	bool compressed)
 {
