@@ -47,6 +47,8 @@ target_compile_options(nylon PRIVATE
 	$<$<COMPILE_LANGUAGE:C>:-fstack-protector-strong;-ffunction-sections;-fdata-sections;-mguard=cf>
 )
 
+target_link_libraries(nylon PRIVATE bcrypt)
+
 target_link_options(nylon PRIVATE
 	-static
 	-fuse-ld=lld
