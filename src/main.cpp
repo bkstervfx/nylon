@@ -33,7 +33,7 @@ nylon::result_t<std::filesystem::path> project_root()
 			executable.error().code);
 	}
 
-	const auto parent = executable.value().parent_path();
+	const auto parent = executable.value().parent_path().lexically_normal();
 	if (CompareStringOrdinal(
 		parent.filename().c_str(),
 		-1,
@@ -45,7 +45,7 @@ nylon::result_t<std::filesystem::path> project_root()
 			parent.parent_path().lexically_normal());
 	}
 
-	return nylon::result_t<std::filesystem::path>::success(L"C:\\nylon");
+	return nylon::result_t<std::filesystem::path>::success(parent);
 }
 
 nylon::status_t create_runtime_directories(
