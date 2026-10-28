@@ -1,104 +1,123 @@
 #ifndef NYLON_DATABASE_DATABASE_HPP
 #define NYLON_DATABASE_DATABASE_HPP
 
-#include <winsqlite3.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <span>
-#include <string>
 #include <string_view>
-#include <vector>
+
+#include <winsqlite3.h>
+
+#include "../result.hpp"
 
 namespace nylon::database
 {
-	struct object_ref_t final
-	{
-		std::int64_t id = 0;
-		std::wstring name;
-		std::wstring path;
-	};
 
-	struct registry_value_t final
-	{
-		std::uint32_t type = 0;
-		std::vector<std::byte> data;
-	};
+using object_id_t = std::int64_t;
 
-	class database_t final
-	{
-	public:
-		explicit database_t( const std::filesystem::path& path );
+class statement_t
+{
+public:
+	statement_t() noexcept = default;
+	explicit statement_t(sqlite3_stmt* statement) noexcept;
+	~statement_t();
 
-		database_t( const database_t& ) = delete;
-		database_t& operator=( const database_t& ) = delete;
+	statement_t(const statement_t&) = delete;
+	statement_t& operator=(const statement_t&) = delete;
 
-		~database_t();
+	statement_t(statement_t&& other) noexcept;
+	statement_t& operator=(statement_t&& other) noexcept;
 
-		void begin();
-		void commit();
-		void rollback() noexcept;
+	[[nodiscard]] sqlite3_stmt* get() const noexcept;
+	[[nodiscard]] sqlite3_stmt* release() noexcept;
+	void reset(sqlite3_stmt* statement = nullptr) noexcept;
 
-		[[nodiscard]] std::int64_t object(
-			std::wstring_view type,
-			std::wstring_view name,
-			std::wstring_view path = {} );
+private:
+	sqlite3_stmt* statement_ = nullptr;
+};
 
-		void property( std::int64_t object_id, std::wstring_view key, std::wstring_view value );
-		void edge(
-			std::int64_t from_id,
-			std::wstring_view relation,
-			std::int64_t to_id,
-			std::wstring_view evidence );
+class database_t
+{
+public:
+	database_t() noexcept = default;
+	~database_t();
 
-		void file(
-			std::int64_t object_id,
-			std::uint64_t size,
-			std::uint32_t attributes,
-			std::uint64_t volume_serial,
-			std::span<const std::byte, 16> file_id,
-			std::uint32_t link_count );
+	database_t(const database_t&) = delete;
+	database_t& operator=(const database_t&) = delete;
 
-		void registry_value(
-			std::int64_t key_id,
-			std::wstring_view name,
-			std::uint32_t type,
-			std::span<const std::byte> data );
+	database_t(database_t&& other) noexcept;
+	database_t& operator=(database_t&& other) noexcept;
 
-		void materialize_file_identities();
+	static result_t<database_t> open(const std::filesystem::path& path);
 
-		void link_path_prefix(
-			std::int64_t owner_id,
-			std::wstring_view relation,
-			std::wstring_view path_prefix,
-			std::wstring_view evidence );
+	status_t initialize();
+	status_t begin();
+	status_t commit();
+	status_t rollback() noexcept;
 
-		[[nodiscard]] std::int64_t find_object_by_path(
-			std::wstring_view type,
-			std::wstring_view path ) const;
+	result_t<object_id_t> object(
+		std::string_view kind,
+		std::string_view key,
+		std::string_view name,
+		std::string_view path = {},
+		std::optional<object_id_t> parent = std::nullopt);
 
-		[[nodiscard]] std::vector<object_ref_t> objects_with_path_prefix(
-			std::wstring_view type,
-			std::wstring_view path_prefix ) const;
+	status_t property(
+		object_id_t object_id,
+		std::string_view key,
+		std::string_view value);
 
-		[[nodiscard]] std::optional<registry_value_t> registry_value(
-			std::int64_t key_id,
-			std::wstring_view name ) const;
+	status_t edge(
+		object_id_t from,
+		std::string_view relation,
+		object_id_t to,
+		std::string_view evidence);
 
-		void note( std::wstring_view collector, std::wstring_view level, std::wstring_view message );
+	status_t file_metadata(
+		object_id_t object_id,
+		std::uint64_t size,
+		std::uint32_t volume_serial,
+		std::uint64_t file_index,
+		std::uint32_t link_count,
+		std::uint32_t attributes);
 
-	private:
-		void exec( const char* sql );
-		[[nodiscard]] sqlite3_stmt* prepare( const char* sql ) const;
-		static void bind_text( sqlite3_stmt* statement, int index, std::wstring_view value );
-		[[nodiscard]] static std::wstring column_text( sqlite3_stmt* statement, int index );
-		static void require_ok( int code, sqlite3* db, const char* operation );
+	status_t registry_data(
+		object_id_t object_id,
+		std::uint32_t type,
+		std::span<const std::byte> data);
 
-		sqlite3* db_ = nullptr;
-		bool transaction_open_ = false;
-	};
+	status_t meta(std::string_view key, std::string_view value);
+	status_t collector_status(
+		std::string_view collector,
+		std::string_view state,
+		std::string_view detail = {});
+	status_t finalize_graph();
+
+private:
+	explicit database_t(sqlite3* database) noexcept;
+
+	void reset() noexcept;
+	status_t prepare_cached_statements();
+	status_t execute(std::string_view sql);
+	result_t<statement_t> prepare(std::string_view sql);
+	status_t bind_text(sqlite3_stmt* statement, int index, std::string_view value);
+	status_t step_done_and_reset(sqlite3_stmt* statement);
+	status_t reset_statement(sqlite3_stmt* statement) noexcept;
+
+	sqlite3* database_ = nullptr;
+	statement_t object_upsert_;
+	statement_t object_select_;
+	statement_t property_insert_;
+	statement_t edge_insert_;
+	statement_t file_metadata_upsert_;
+	statement_t registry_data_upsert_;
+	statement_t metadata_upsert_;
+	statement_t collector_upsert_;
+	bool in_transaction_ = false;
+};
+
 }
 
 #endif

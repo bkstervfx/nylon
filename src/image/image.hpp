@@ -2,28 +2,29 @@
 #define NYLON_IMAGE_IMAGE_HPP
 
 #include <filesystem>
+#include <string>
 
-namespace nylon::database
-{
-	class database_t;
-}
+#include "../result.hpp"
 
 namespace nylon::image
 {
-	struct paths_t final
-	{
-		std::filesystem::path project_root;
-		std::filesystem::path image_root;
-		std::filesystem::path temp_root;
-		std::filesystem::path cache_root;
-		std::filesystem::path output_root;
-	};
 
-	[[nodiscard]] paths_t resolve_paths(
-		const std::filesystem::path& executable,
-		const std::filesystem::path& requested_image );
+class image_t
+{
+public:
+	static result_t<image_t> open(std::filesystem::path root);
 
-	void audit( const paths_t& paths, database::database_t& database );
+	[[nodiscard]] const std::filesystem::path& root() const noexcept;
+	[[nodiscard]] result_t<std::filesystem::path> resolve(const std::filesystem::path& relative) const;
+	[[nodiscard]] result_t<std::string> relative_utf8(const std::filesystem::path& absolute) const;
+	[[nodiscard]] result_t<std::string> utf8_path(const std::filesystem::path& path) const;
+
+private:
+	explicit image_t(std::filesystem::path root);
+
+	std::filesystem::path root_;
+};
+
 }
 
 #endif

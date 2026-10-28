@@ -1,437 +1,292 @@
 #include "registry.hpp"
-
-#include "../database/database.hpp"
-#include "../win32/privilege.hpp"
-#include "../win32/resource.hpp"
+#include "detail.hpp"
 
 #include <Windows.h>
 
 #include <algorithm>
-#include <atomic>
-#include <cstddef>
-#include <cstdint>
-#include <cwctype>
-#include <filesystem>
+#include <cstring>
+#include <deque>
+#include <set>
 #include <span>
-#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
-#include <vector>
 
-namespace
-{
-	constexpr std::size_t MAX_KEY_NAME = 32767;
-	constexpr std::size_t MAX_VALUE_NAME = 32767;
-	constexpr std::size_t MAX_VALUE_DATA = 64U * 1024U * 1024U;
-
-	[[nodiscard]] bool starts_with_insensitive(
-		std::wstring_view text,
-		std::wstring_view prefix )
-	{
-		if ( text.size() < prefix.size() )
-		{
-			return false;
-		}
-
-		for ( std::size_t index = 0; index < prefix.size(); ++index )
-		{
-			if ( std::towlower( text[index] ) != std::towlower( prefix[index] ) )
-			{
-				return false;
-			}
-		}
-
-		return true;
-	}
-
-	[[nodiscard]] std::filesystem::path copy_hive_family(
-		const std::filesystem::path& source,
-		const std::filesystem::path& temp_registry_root,
-		const std::wstring& hive_name )
-	{
-		const auto destination_root = temp_registry_root / hive_name;
-		std::error_code error;
-
-		std::filesystem::remove_all( destination_root, error );
-
-		if ( error )
-		{
-			throw std::runtime_error( "could not clear temporary registry directory" );
-		}
-
-		std::filesystem::create_directories( destination_root );
-
-		const std::wstring prefix = source.filename().native();
-		bool copied_primary = false;
-
-		for ( const auto& entry : std::filesystem::directory_iterator(
-			source.parent_path(),
-			std::filesystem::directory_options::skip_permission_denied,
-			error ) )
-		{
-			if ( error )
-			{
-				throw std::runtime_error( "could not enumerate registry hive companions" );
-			}
-
-			if ( !entry.is_regular_file( error ) )
-			{
-				if ( error )
-				{
-					throw std::runtime_error( "could not inspect registry hive companion" );
-				}
-
-				continue;
-			}
-
-			const std::wstring name = entry.path().filename().native();
-
-			if ( !starts_with_insensitive( name, prefix ) )
-			{
-				continue;
-			}
-
-			const auto destination = destination_root / entry.path().filename();
-			std::filesystem::copy_file(
-				entry.path(),
-				destination,
-				std::filesystem::copy_options::overwrite_existing );
-
-			if ( entry.path().filename() == source.filename() )
-			{
-				copied_primary = true;
-			}
-		}
-
-		if ( !copied_primary )
-		{
-			throw std::runtime_error( "registry hive primary file was not copied" );
-		}
-
-		return destination_root / source.filename();
-	}
-
-	class mounted_hive_t final
-	{
-	public:
-		explicit mounted_hive_t( const std::filesystem::path& path )
-		{
-			static std::atomic<std::uint32_t> sequence{ 0 };
-
-			mount_name_ =
-				L"NYLON_AUDIT_" +
-				std::to_wstring( ::GetCurrentProcessId() ) +
-				L"_" +
-				std::to_wstring( sequence.fetch_add( 1, std::memory_order_relaxed ) );
-
-			const LSTATUS load_status = ::RegLoadKeyW(
-				HKEY_LOCAL_MACHINE,
-				mount_name_.c_str(),
-				path.c_str() );
-
-			if ( load_status != ERROR_SUCCESS )
-			{
-				throw std::runtime_error(
-					"RegLoadKeyW failed with error " +
-					std::to_string( load_status ) );
-			}
-
-			HKEY raw_root = nullptr;
-			const LSTATUS open_status = ::RegOpenKeyExW(
-				HKEY_LOCAL_MACHINE,
-				mount_name_.c_str(),
-				0,
-				KEY_READ,
-				&raw_root );
-
-			if ( open_status != ERROR_SUCCESS )
-			{
-				::RegUnLoadKeyW( HKEY_LOCAL_MACHINE, mount_name_.c_str() );
-
-				throw std::runtime_error(
-					"RegOpenKeyExW failed after RegLoadKeyW with error " +
-					std::to_string( open_status ) );
-			}
-
-			root_.reset( raw_root );
-		}
-
-		mounted_hive_t( const mounted_hive_t& ) = delete;
-		mounted_hive_t& operator=( const mounted_hive_t& ) = delete;
-
-		~mounted_hive_t()
-		{
-			root_.reset();
-
-			if ( !mount_name_.empty() )
-			{
-				::RegUnLoadKeyW( HKEY_LOCAL_MACHINE, mount_name_.c_str() );
-			}
-		}
-
-		[[nodiscard]] HKEY get() const noexcept
-		{
-			return root_.get();
-		}
-
-	private:
-		std::wstring mount_name_;
-		nylon::win32::hkey_t root_;
-	};
-
-	void enumerate_key(
-		HKEY key,
-		const std::wstring& hive_name,
-		const std::wstring& relative_path,
-		nylon::database::database_t& database,
-		std::int64_t parent_id,
-		std::size_t depth )
-	{
-		const std::wstring full_name = relative_path.empty()
-			? hive_name
-			: hive_name + L"\\" + relative_path;
-
-		if ( depth > 512U )
-		{
-			database.note( L"registry", L"warning", L"registry depth limit reached: " + full_name );
-			return;
-		}
-
-		const auto key_id = database.object( L"registry_key", full_name, full_name );
-
-		if ( parent_id != 0 )
-		{
-			database.edge( parent_id, L"contains", key_id, L"registry" );
-		}
-
-		DWORD subkey_count = 0;
-		DWORD max_subkey_length = 0;
-		DWORD value_count = 0;
-		DWORD max_value_name_length = 0;
-		DWORD max_value_data_length = 0;
-
-		const LSTATUS info_status = ::RegQueryInfoKeyW(
-			key,
-			nullptr,
-			nullptr,
-			nullptr,
-			&subkey_count,
-			&max_subkey_length,
-			nullptr,
-			&value_count,
-			&max_value_name_length,
-			&max_value_data_length,
-			nullptr,
-			nullptr );
-
-		if ( info_status != ERROR_SUCCESS )
-		{
-			database.note( L"registry", L"warning", L"RegQueryInfoKeyW failed: " + full_name );
-			return;
-		}
-
-		if ( max_value_data_length > MAX_VALUE_DATA )
-		{
-			database.note( L"registry", L"warning", L"registry value exceeds audit bound: " + full_name );
-			max_value_data_length = static_cast<DWORD>( MAX_VALUE_DATA );
-		}
-
-		std::vector<wchar_t> value_name(
-			std::min<std::size_t>(
-				static_cast<std::size_t>( max_value_name_length ) + 2U,
-				MAX_VALUE_NAME + 1U ) );
-
-		std::vector<std::byte> value_data(
-			std::max<std::size_t>(
-				static_cast<std::size_t>( max_value_data_length ),
-				1U ) );
-
-		for ( DWORD index = 0; index < value_count; ++index )
-		{
-			DWORD name_length = static_cast<DWORD>( value_name.size() );
-			DWORD data_length = static_cast<DWORD>( value_data.size() );
-			DWORD type = 0;
-
-			const LSTATUS value_status = ::RegEnumValueW(
-				key,
-				index,
-				value_name.data(),
-				&name_length,
-				nullptr,
-				&type,
-				reinterpret_cast<BYTE*>( value_data.data() ),
-				&data_length );
-
-			if ( value_status == ERROR_MORE_DATA )
-			{
-				database.note(
-					L"registry",
-					L"warning",
-					L"registry value skipped because it exceeded audit bound: " + full_name );
-				continue;
-			}
-
-			if ( value_status != ERROR_SUCCESS )
-			{
-				database.note( L"registry", L"warning", L"RegEnumValueW failed: " + full_name );
-				continue;
-			}
-
-			const std::wstring_view name( value_name.data(), name_length );
-			const std::span<const std::byte> data( value_data.data(), data_length );
-			database.registry_value( key_id, name, type, data );
-		}
-
-		if ( max_subkey_length >= MAX_KEY_NAME )
-		{
-			database.note( L"registry", L"warning", L"registry key name exceeds audit bound: " + full_name );
-			return;
-		}
-
-		std::vector<wchar_t> subkey_name( static_cast<std::size_t>( max_subkey_length ) + 2U );
-
-		for ( DWORD index = 0; index < subkey_count; ++index )
-		{
-			DWORD name_length = static_cast<DWORD>( subkey_name.size() );
-
-			const LSTATUS enum_status = ::RegEnumKeyExW(
-				key,
-				index,
-				subkey_name.data(),
-				&name_length,
-				nullptr,
-				nullptr,
-				nullptr,
-				nullptr );
-
-			if ( enum_status != ERROR_SUCCESS )
-			{
-				database.note( L"registry", L"warning", L"RegEnumKeyExW failed: " + full_name );
-				continue;
-			}
-
-			const std::wstring child_name( subkey_name.data(), name_length );
-			HKEY raw_child = nullptr;
-
-			const LSTATUS open_status = ::RegOpenKeyExW(
-				key,
-				child_name.c_str(),
-				0,
-				KEY_READ,
-				&raw_child );
-
-			if ( open_status != ERROR_SUCCESS )
-			{
-				database.note(
-					L"registry",
-					L"warning",
-					L"RegOpenKeyExW failed: " + full_name + L"\\" + child_name );
-				continue;
-			}
-
-			nylon::win32::hkey_t child( raw_child );
-			const std::wstring child_path = relative_path.empty()
-				? child_name
-				: relative_path + L"\\" + child_name;
-
-			enumerate_key( child.get(), hive_name, child_path, database, key_id, depth + 1U );
-		}
-	}
-
-	void scan_hive(
-		const std::filesystem::path& path,
-		const std::filesystem::path& temp_registry_root,
-		const std::wstring& hive_name,
-		nylon::database::database_t& database )
-	{
-		if ( !std::filesystem::is_regular_file( path ) )
-		{
-			return;
-		}
-
-		try
-		{
-			const auto copy = copy_hive_family( path, temp_registry_root, hive_name );
-			mounted_hive_t hive( copy );
-			enumerate_key( hive.get(), hive_name, L"", database, 0, 0 );
-		}
-		catch ( const std::exception& error )
-		{
-			std::wstring message = L"hive load failed for " + hive_name + L": ";
-			const std::string narrow = error.what();
-			message.append( narrow.begin(), narrow.end() );
-			database.note( L"registry", L"warning", message );
-		}
-	}
-}
+#include "../platform/win32.hpp"
 
 namespace nylon::registry
 {
-	void scan(
-		const std::filesystem::path& image_root,
-		const std::filesystem::path& temp_root,
-		database::database_t& database )
+
+namespace
+{
+
+struct pending_key_t
+{
+	std::wstring path;
+	database::object_id_t parent = 0;
+};
+
+using detail::decode_utf16;
+using detail::ordinal_less_t;
+
+result_t<std::optional<std::string>> value_text(const value_t& value)
+{
+	if (value.type == REG_DWORD && value.data.size() == sizeof(std::uint32_t))
 	{
-		database.note( L"registry", L"info", L"scan started" );
-
-		nylon::win32::enable_privilege( SE_BACKUP_NAME );
-		nylon::win32::enable_privilege( SE_RESTORE_NAME );
-
-		const auto temp_registry_root = temp_root / L"registry";
-		std::error_code temp_error;
-		std::filesystem::remove_all( temp_registry_root, temp_error );
-
-		if ( temp_error )
-		{
-			throw std::runtime_error( "could not clear registry temporary root" );
-		}
-
-		std::filesystem::create_directories( temp_registry_root );
-
-		const auto config = image_root / L"Windows" / L"System32" / L"config";
-
-		const std::pair<const wchar_t*, const wchar_t*> hives[] =
-		{
-			{ L"SOFTWARE", L"SOFTWARE" },
-			{ L"SYSTEM", L"SYSTEM" },
-			{ L"COMPONENTS", L"COMPONENTS" },
-			{ L"DEFAULT", L"DEFAULT" },
-			{ L"SAM", L"SAM" },
-			{ L"SECURITY", L"SECURITY" }
-		};
-
-		for ( const auto& [file_name, hive_name] : hives )
-		{
-			scan_hive( config / file_name, temp_registry_root, hive_name, database );
-		}
-
-		scan_hive(
-			image_root / L"Users" / L"Default" / L"NTUSER.DAT",
-			temp_registry_root,
-			L"DEFAULT_USER",
-			database );
-
-		scan_hive(
-			image_root / L"Users" / L"Default" / L"AppData" / L"Local" /
-				L"Microsoft" / L"Windows" / L"UsrClass.dat",
-			temp_registry_root,
-			L"DEFAULT_USER_CLASSES",
-			database );
-
-		scan_hive( image_root / L"Boot" / L"BCD", temp_registry_root, L"BCD_BOOT", database );
-		scan_hive(
-			image_root / L"EFI" / L"Microsoft" / L"Boot" / L"BCD",
-			temp_registry_root,
-			L"BCD_EFI",
-			database );
-
-		std::filesystem::remove_all( temp_registry_root, temp_error );
-
-		if ( temp_error )
-		{
-			database.note( L"registry", L"warning", L"temporary hive copies could not be fully removed" );
-		}
-
-		database.note( L"registry", L"info", L"scan completed" );
+		std::uint32_t number = 0;
+		std::memcpy(&number, value.data.data(), sizeof(number));
+		return result_t<std::optional<std::string>>::success(std::to_string(number));
 	}
+
+	if (value.type == REG_QWORD && value.data.size() == sizeof(std::uint64_t))
+	{
+		std::uint64_t number = 0;
+		std::memcpy(&number, value.data.data(), sizeof(number));
+		return result_t<std::optional<std::string>>::success(std::to_string(number));
+	}
+
+	if (value.type != REG_SZ && value.type != REG_EXPAND_SZ && value.type != REG_MULTI_SZ)
+	{
+		return result_t<std::optional<std::string>>::success(std::nullopt);
+	}
+
+	auto decoded = decode_utf16(std::span<const std::byte>(value.data.data(), value.data.size()));
+	if (!decoded.ok())
+	{
+		return result_t<std::optional<std::string>>::failure(decoded.error().message, decoded.error().code);
+	}
+
+	const std::wstring& text = decoded.value();
+	std::wstring joined;
+
+	if (value.type == REG_MULTI_SZ)
+	{
+		std::size_t cursor = 0;
+		while (cursor < text.size())
+		{
+			std::size_t end = cursor;
+			while (end < text.size() && text[end] != L'\0') ++end;
+			if (end == cursor) break;
+			if (!joined.empty()) joined.push_back(L'\n');
+			joined.append(text.data() + cursor, end - cursor);
+			cursor = end + 1;
+		}
+	}
+	else
+	{
+		std::size_t length = text.size();
+		while (length > 0 && text[length - 1] == L'\0') --length;
+		joined.assign(text.data(), length);
+	}
+
+	auto converted = platform::utf8(joined);
+	if (!converted.ok())
+	{
+		return result_t<std::optional<std::string>>::failure(converted.error().message, converted.error().code);
+	}
+	return result_t<std::optional<std::string>>::success(std::optional<std::string>(std::move(converted).value()));
+}
+
+std::string join_key(std::string_view left, std::string_view right)
+{
+	if (right.empty()) return std::string(left);
+	std::string value(left);
+	value.push_back('\\');
+	value.append(right);
+	return value;
+}
+
+status_t scan_hive(const std::filesystem::path& path, std::string_view hive_name, bool required, database::database_t& database)
+{
+	auto hive_result = hive_t::open(path);
+	if (!hive_result.ok())
+	{
+		auto error_object = database.object("audit_error", std::string("registry:") + std::string(hive_name), std::string(hive_name));
+		if (error_object.ok())
+		{
+			database.property(error_object.value(), "collector", "registry");
+			database.property(error_object.value(), "message", hive_result.error().message);
+			database.property(error_object.value(), "code", std::to_string(hive_result.error().code));
+			database.property(error_object.value(), "required", required ? "true" : "false");
+		}
+		if (required) return status_t::failure(hive_result.error().message, hive_result.error().code);
+		return status_t::success();
+	}
+
+	auto hive = std::move(hive_result).value();
+	auto hive_object = database.object("registry_hive", std::string(hive_name), std::string(hive_name));
+	if (!hive_object.ok()) return status_t::failure(hive_object.error().message, hive_object.error().code);
+
+	std::deque<pending_key_t> pending;
+	pending.push_back(pending_key_t{ L"", hive_object.value() });
+	while (!pending.empty())
+	{
+		auto current = std::move(pending.front());
+		pending.pop_front();
+		auto current_utf8 = platform::utf8(current.path);
+		if (!current_utf8.ok()) return status_t::failure(current_utf8.error().message, current_utf8.error().code);
+
+		const std::string object_key = key_object_key(hive_name, current_utf8.value());
+		const std::string display_name = current.path.empty() ? std::string(hive_name) : current_utf8.value();
+		auto key_object = database.object("registry_key", object_key, display_name, object_key, current.parent);
+		if (!key_object.ok()) return status_t::failure(key_object.error().message, key_object.error().code);
+
+		auto values_result = hive.values(current.path);
+		if (!values_result.ok()) return status_t::failure(values_result.error().message, values_result.error().code);
+		for (const auto& value : values_result.value())
+		{
+			auto value_name = platform::utf8(value.name);
+			if (!value_name.ok()) return status_t::failure(value_name.error().message, value_name.error().code);
+			const std::string value_key = value_object_key(hive_name, current_utf8.value(), value_name.value());
+			auto value_object = database.object("registry_value", value_key, value_name.value().empty() ? "(Default)" : value_name.value(), value_key, key_object.value());
+			if (!value_object.ok()) return status_t::failure(value_object.error().message, value_object.error().code);
+
+			auto raw = database.registry_data(value_object.value(), value.type, std::span<const std::byte>(value.data.data(), value.data.size()));
+			if (!raw.ok()) return raw;
+			auto type = database.property(value_object.value(), "type", std::to_string(value.type));
+			if (!type.ok()) return type;
+			auto text_result = value_text(value);
+			if (!text_result.ok()) return status_t::failure(text_result.error().message, text_result.error().code);
+			if (text_result.value().has_value())
+			{
+				auto property = database.property(value_object.value(), "text", *text_result.value());
+				if (!property.ok()) return property;
+			}
+		}
+
+		auto subkeys_result = hive.subkeys(current.path);
+		if (!subkeys_result.ok()) return status_t::failure(subkeys_result.error().message, subkeys_result.error().code);
+		for (const auto& subkey : subkeys_result.value())
+		{
+			std::wstring child = current.path;
+			if (!child.empty()) child.push_back(L'\\');
+			child.append(subkey);
+			pending.push_back(pending_key_t{ std::move(child), key_object.value() });
+		}
+	}
+	return status_t::success();
+}
+
+bool has_regf_signature(const std::filesystem::path& path)
+{
+	auto mapped = platform::mapped_file_t::open_readonly(path);
+	if (!mapped.ok()) return false;
+	const auto bytes = mapped.value().bytes();
+	return bytes.size() >= 4U && std::to_integer<unsigned char>(bytes[0]) == 'r' && std::to_integer<unsigned char>(bytes[1]) == 'e' && std::to_integer<unsigned char>(bytes[2]) == 'g' && std::to_integer<unsigned char>(bytes[3]) == 'f';
+}
+
+status_t scan_optional_hive_path(const image::image_t& image, database::database_t& database, const std::filesystem::path& path, std::set<std::wstring, ordinal_less_t>& scanned)
+{
+	const std::wstring normalized = path.lexically_normal().native();
+	if (!scanned.insert(normalized).second || !has_regf_signature(path)) return status_t::success();
+	auto relative = image.relative_utf8(path);
+	if (!relative.ok()) return status_t::failure(relative.error().message, relative.error().code);
+	std::string label = "HIVE:";
+	label.append(relative.value());
+	return scan_hive(path, label, false, database);
+}
+
+}
+
+std::string key_object_key(std::string_view hive, std::string_view relative_path)
+{
+	return join_key(hive, relative_path);
+}
+
+std::string value_object_key(std::string_view hive, std::string_view relative_path, std::string_view value_name)
+{
+	std::string result = key_object_key(hive, relative_path);
+	result.append("::");
+	result.append(value_name);
+	return result;
+}
+
+status_t scan_all(const image::image_t& image, database::database_t& database)
+{
+	struct hive_spec_t { const wchar_t* relative_path; const char* name; bool required; };
+	const hive_spec_t known_hives[] = {
+		{ L"Windows\\System32\\config\\SOFTWARE", "SOFTWARE", true },
+		{ L"Windows\\System32\\config\\SYSTEM", "SYSTEM", true },
+		{ L"Windows\\System32\\config\\COMPONENTS", "COMPONENTS", true },
+		{ L"Windows\\System32\\config\\DEFAULT", "DEFAULT", true },
+		{ L"Windows\\System32\\config\\SAM", "SAM", true },
+		{ L"Windows\\System32\\config\\SECURITY", "SECURITY", true },
+		{ L"Boot\\BCD", "BCD", false },
+		{ L"EFI\\Microsoft\\Boot\\BCD", "BCD_EFI", false },
+		{ L"Windows\\AppCompat\\Programs\\Amcache.hve", "AMCACHE", false }
+	};
+
+	std::set<std::wstring, ordinal_less_t> scanned;
+	for (const auto& specification : known_hives)
+	{
+		auto path_result = image.resolve(specification.relative_path);
+		if (!path_result.ok()) return status_t::failure(path_result.error().message, path_result.error().code);
+		const auto& path = path_result.value();
+		std::error_code error;
+		const bool exists = std::filesystem::is_regular_file(path, error);
+		if (error) return status_t::failure("Unable to inspect registry hive path", error.value());
+		if (!exists)
+		{
+			if (specification.required) return status_t::failure(std::string("Required offline registry hive is missing: ") + specification.name, ERROR_FILE_NOT_FOUND);
+			continue;
+		}
+		scanned.insert(path.lexically_normal().native());
+		auto result = scan_hive(path, specification.name, specification.required, database);
+		if (!result.ok()) return result;
+	}
+
+	auto config_result = image.resolve(L"Windows\\System32\\config");
+	if (!config_result.ok()) return status_t::failure(config_result.error().message, config_result.error().code);
+	const auto& config_root = config_result.value();
+	std::error_code error;
+	std::vector<std::filesystem::path> candidates;
+	for (std::filesystem::directory_iterator iterator(config_root, std::filesystem::directory_options::skip_permission_denied, error); !error && iterator != std::filesystem::directory_iterator(); iterator.increment(error))
+	{
+		std::error_code entry_error;
+		if (iterator->is_regular_file(entry_error) && !entry_error && has_regf_signature(iterator->path())) candidates.push_back(iterator->path());
+	}
+	if (error) return status_t::failure("Unable to enumerate offline registry config directory", error.value());
+	std::sort(candidates.begin(), candidates.end());
+	for (const auto& candidate : candidates)
+	{
+		auto result = scan_optional_hive_path(image, database, candidate, scanned);
+		if (!result.ok()) return result;
+	}
+
+	for (const auto* relative_root : { L"Users", L"Windows\\ServiceProfiles" })
+	{
+		auto root_result = image.resolve(relative_root);
+		if (!root_result.ok()) return status_t::failure(root_result.error().message, root_result.error().code);
+		const auto& root = root_result.value();
+		error.clear();
+		if (!std::filesystem::is_directory(root, error))
+		{
+			if (error) return status_t::failure("Unable to inspect registry hive search root", error.value());
+			continue;
+		}
+		candidates.clear();
+		for (std::filesystem::recursive_directory_iterator iterator(root, std::filesystem::directory_options::skip_permission_denied, error); !error && iterator != std::filesystem::recursive_directory_iterator(); iterator.increment(error))
+		{
+			auto attributes = platform::file_attributes(iterator->path());
+			if (!attributes.ok()) return status_t::failure(attributes.error().message, attributes.error().code);
+			if ((attributes.value() & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+			{
+				std::error_code type_error;
+				if (iterator->is_directory(type_error) && !type_error) iterator.disable_recursion_pending();
+				continue;
+			}
+			std::error_code entry_error;
+			if (iterator->is_regular_file(entry_error) && !entry_error && has_regf_signature(iterator->path())) candidates.push_back(iterator->path());
+		}
+		if (error) return status_t::failure("Unable to enumerate offline user registry hives", error.value());
+		std::sort(candidates.begin(), candidates.end());
+		for (const auto& candidate : candidates)
+		{
+			auto result = scan_optional_hive_path(image, database, candidate, scanned);
+			if (!result.ok()) return result;
+		}
+	}
+	return status_t::success();
+}
+
 }
