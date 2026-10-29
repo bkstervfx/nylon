@@ -102,6 +102,18 @@ nylon::result_t<cli_options_t> parse_cli(int argc, wchar_t** argv)
 	return nylon::result_t<cli_options_t>::success(std::move(options));
 }
 
+bool looks_like_project_root(const std::filesystem::path& candidate)
+{
+	std::error_code error;
+	if (std::filesystem::is_regular_file(candidate / L"build.cmd", error) && !error)
+	{
+		return true;
+	}
+
+	error.clear();
+	return std::filesystem::is_directory(candidate / L"tools" / L"media", error) && !error;
+}
+
 nylon::result_t<std::filesystem::path> project_root()
 {
 	auto executable = nylon::platform::executable_path();
@@ -120,8 +132,11 @@ nylon::result_t<std::filesystem::path> project_root()
 		-1,
 		TRUE) == CSTR_EQUAL)
 	{
-		return nylon::result_t<std::filesystem::path>::success(
-			parent.parent_path().lexically_normal());
+		const auto candidate = parent.parent_path().lexically_normal();
+		if (looks_like_project_root(candidate))
+		{
+			return nylon::result_t<std::filesystem::path>::success(candidate);
+		}
 	}
 
 	return nylon::result_t<std::filesystem::path>::success(parent);
@@ -223,13 +238,6 @@ int wmain(int argc, wchar_t** argv)
 		std::cout << "cache: " << (prepared.cache_hit ? "hit" : "created") << '\n';
 	}
 
-	status = replace_database(database_path);
-	if (!status.ok())
-	{
-		print_error(status.error());
-		return 1;
-	}
-
 	auto image_result = nylon::image::image_t::open(prepared.image_root);
 	if (!image_result.ok())
 	{
@@ -237,6 +245,13 @@ int wmain(int argc, wchar_t** argv)
 		return 1;
 	}
 	auto image = std::move(image_result).value();
+
+	status = replace_database(database_path);
+	if (!status.ok())
+	{
+		print_error(status.error());
+		return 1;
+	}
 
 	auto database_result = nylon::database::database_t::open(database_path);
 	if (!database_result.ok())
@@ -361,6 +376,9 @@ int wmain(int argc, wchar_t** argv)
 	}
 
 	std::cout << "complete\n";
-	std::cout << "database: " << database_path.string() << '\n';
+	auto database_display = nylon::platform::utf8(database_path.native());
+	std::cout << "database: "
+		<< (database_display.ok() ? database_display.value() : std::string("<path encoding error>"))
+		<< '\n';
 	return 0;
 }
