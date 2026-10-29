@@ -569,12 +569,19 @@ status_t database_t::registry_data(
 	if (rc == SQLITE_OK) rc = sqlite3_bind_int64(registry_data_upsert_.get(), 2, type);
 	if (rc == SQLITE_OK)
 	{
-		rc = sqlite3_bind_blob(
-			registry_data_upsert_.get(),
-			3,
-			data.empty() ? nullptr : data.data(),
-			static_cast<int>(data.size()),
-			SQLITE_TRANSIENT);
+		if (data.empty())
+		{
+			rc = sqlite3_bind_zeroblob(registry_data_upsert_.get(), 3, 0);
+		}
+		else
+		{
+			rc = sqlite3_bind_blob(
+				registry_data_upsert_.get(),
+				3,
+				data.data(),
+				static_cast<int>(data.size()),
+				SQLITE_TRANSIENT);
+		}
 	}
 
 	if (rc != SQLITE_OK)
@@ -700,10 +707,11 @@ status_t database_t::bind_text(sqlite3_stmt* statement, int index, std::string_v
 		return status_t::failure("SQLite text value is too large");
 	}
 
+	const char* text = value.empty() ? "" : value.data();
 	const int rc = sqlite3_bind_text(
 		statement,
 		index,
-		value.data(),
+		text,
 		static_cast<int>(value.size()),
 		SQLITE_TRANSIENT);
 
