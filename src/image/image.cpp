@@ -29,6 +29,41 @@ bool escapes_root(const std::filesystem::path& relative)
 	return false;
 }
 
+status_t reject_reparse_components(
+	const std::filesystem::path& root,
+	const std::filesystem::path& relative)
+{
+	std::filesystem::path current = root;
+	for (const auto& component : relative)
+	{
+		if (component.empty() || component == L".")
+		{
+			continue;
+		}
+
+		current /= component;
+		auto attributes = platform::file_attributes(current);
+		if (!attributes.ok())
+		{
+			if (attributes.error().code == ERROR_FILE_NOT_FOUND ||
+				attributes.error().code == ERROR_PATH_NOT_FOUND)
+			{
+				break;
+			}
+			return status_t::failure(attributes.error().message, attributes.error().code);
+		}
+
+		if ((attributes.value() & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+		{
+			return status_t::failure(
+				"Image-relative path traverses a reparse point",
+				ERROR_ACCESS_DENIED);
+		}
+	}
+
+	return status_t::success();
+}
+
 }
 
 image_t::image_t(std::filesystem::path root)
@@ -51,25 +86,39 @@ result_t<image_t> image_t::open(std::filesystem::path root)
 		return result_t<image_t>::failure("Image root is not a readable directory", error.value());
 	}
 
-	const auto windows = root / L"Windows";
-	const auto config = windows / L"System32" / L"config";
-	const auto kernel = windows / L"System32" / L"ntoskrnl.exe";
-
+	image_t image(root);
+	auto config_result = image.resolve(L"Windows\\System32\\config");
+	if (!config_result.ok())
+	{
+		return result_t<image_t>::failure(config_result.error().message, config_result.error().code);
+	}
+	const auto config = config_result.value();
 	if (!std::filesystem::is_directory(config, error) || error)
 	{
 		return result_t<image_t>::failure("Image root does not contain Windows\\System32\\config");
 	}
 
+	auto kernel_result = image.resolve(L"Windows\\System32\\ntoskrnl.exe");
+	if (!kernel_result.ok())
+	{
+		return result_t<image_t>::failure(kernel_result.error().message, kernel_result.error().code);
+	}
 	error.clear();
-	if (!std::filesystem::is_regular_file(kernel, error) || error)
+	if (!std::filesystem::is_regular_file(kernel_result.value(), error) || error)
 	{
 		return result_t<image_t>::failure("Image root does not contain Windows\\System32\\ntoskrnl.exe");
 	}
 
-	for (const auto* name : { L"SOFTWARE", L"SYSTEM", L"COMPONENTS" })
+	for (const auto* name : { L"SOFTWARE", L"SYSTEM", L"COMPONENTS", L"DEFAULT", L"SAM", L"SECURITY" })
 	{
+		auto hive_result = image.resolve(std::filesystem::path(L"Windows\\System32\\config") / name);
+		if (!hive_result.ok())
+		{
+			return result_t<image_t>::failure(hive_result.error().message, hive_result.error().code);
+		}
+
 		error.clear();
-		if (!std::filesystem::is_regular_file(config / name, error) || error)
+		if (!std::filesystem::is_regular_file(hive_result.value(), error) || error)
 		{
 			auto narrow = platform::utf8(name);
 			return result_t<image_t>::failure(
@@ -79,7 +128,7 @@ result_t<image_t> image_t::open(std::filesystem::path root)
 		}
 	}
 
-	return result_t<image_t>::success(image_t(std::move(root)));
+	return result_t<image_t>::success(std::move(image));
 }
 
 const std::filesystem::path& image_t::root() const noexcept
@@ -102,6 +151,14 @@ result_t<std::filesystem::path> image_t::resolve(const std::filesystem::path& re
 	if (escapes_root(normalized))
 	{
 		return result_t<std::filesystem::path>::failure("Image-relative path escapes the image root");
+	}
+
+	auto reparse_status = reject_reparse_components(root_, normalized);
+	if (!reparse_status.ok())
+	{
+		return result_t<std::filesystem::path>::failure(
+			reparse_status.error().message,
+			reparse_status.error().code);
 	}
 
 	return result_t<std::filesystem::path>::success((root_ / normalized).lexically_normal());
