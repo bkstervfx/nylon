@@ -1,0 +1,31 @@
+#include "win32.hpp"
+
+namespace nylon::platform
+{
+
+result_t<unique_handle_t> open_read_lock(const std::filesystem::path& path)
+{
+	auto native = native_path(path);
+	if (!native.ok())
+	{
+		return result_t<unique_handle_t>::failure(native.error().message, native.error().code);
+	}
+
+	unique_handle_t file(CreateFileW(
+		native.value().c_str(),
+		GENERIC_READ,
+		FILE_SHARE_READ,
+		nullptr,
+		OPEN_EXISTING,
+		FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN,
+		nullptr));
+	if (!file)
+	{
+		const auto error = win32_error("Unable to acquire stable read lock for input file");
+		return result_t<unique_handle_t>::failure(error.message, error.code);
+	}
+
+	return result_t<unique_handle_t>::success(std::move(file));
+}
+
+}
