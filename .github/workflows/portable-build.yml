@@ -86,22 +86,30 @@ jobs:
             [System.IO.File]::SetAttributes($path, $attributes -bor [System.IO.FileAttributes]::ReadOnly)
           }
 
-          & .\bin\nylon.exe scan .\cache-smoke.iso --index 1 *> cache-smoke-output.txt
-          if ($LASTEXITCODE -eq 0) {
-            Get-Content cache-smoke-output.txt
+          $stdout = Join-Path $PWD.Path 'cache-smoke-stdout.txt'
+          $stderr = Join-Path $PWD.Path 'cache-smoke-stderr.txt'
+          $process = Start-Process \
+            -FilePath (Join-Path $PWD.Path 'bin\nylon.exe') \
+            -ArgumentList @('scan', (Join-Path $PWD.Path 'cache-smoke.iso'), '--index', '1') \
+            -RedirectStandardOutput $stdout \
+            -RedirectStandardError $stderr \
+            -Wait \
+            -PassThru
+          $output = (Get-Content $stdout -Raw) + "`n" + (Get-Content $stderr -Raw)
+          if ($process.ExitCode -eq 0) {
+            Write-Host $output
             throw 'Cache smoke test unexpectedly succeeded'
           }
-          $output = Get-Content cache-smoke-output.txt -Raw
           if (-not $output.Contains('cache: hit')) {
-            Get-Content cache-smoke-output.txt
+            Write-Host $output
             throw 'Cache smoke test did not use the prepared cache'
           }
           if ($output.Contains('Unable to enumerate immutable ISO cache')) {
-            Get-Content cache-smoke-output.txt
+            Write-Host $output
             throw 'Cache verification failed while traversing a long path'
           }
           if (-not $output.Contains('Image root does not contain Windows\System32\ntoskrnl.exe')) {
-            Get-Content cache-smoke-output.txt
+            Write-Host $output
             throw 'Cache verification did not advance to image validation'
           }
 
