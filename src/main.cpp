@@ -11,6 +11,7 @@
 #include "image/image.hpp"
 #include "media/media.hpp"
 #include "platform/win32.hpp"
+#include "progress/progress.hpp"
 #include "registry/registry.hpp"
 
 namespace
@@ -375,8 +376,11 @@ int wmain(int argc, wchar_t** argv)
 		return 1;
 	}
 
-	std::cout << "registry...\n";
-	status = nylon::registry::scan_all(image, database);
+	nylon::progress::registry_state_t registry_progress;
+	nylon::progress::registry_view_t registry_view(registry_progress);
+	registry_view.start();
+	status = nylon::registry::scan_all(image, database, &registry_progress);
+	registry_view.finish(status.ok());
 	if (!status.ok())
 	{
 		database.rollback();
