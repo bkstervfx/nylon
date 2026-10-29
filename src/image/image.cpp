@@ -86,6 +86,16 @@ result_t<image_t> image_t::open(std::filesystem::path root)
 		return result_t<image_t>::failure("Image root is not a readable directory", error.value());
 	}
 
+	auto root_attributes = platform::file_attributes(root);
+	if (!root_attributes.ok())
+	{
+		return result_t<image_t>::failure(root_attributes.error().message, root_attributes.error().code);
+	}
+	if ((root_attributes.value() & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+	{
+		return result_t<image_t>::failure("Image root must not be a reparse point", ERROR_ACCESS_DENIED);
+	}
+
 	image_t image(root);
 	auto config_result = image.resolve(L"Windows\\System32\\config");
 	if (!config_result.ok())
