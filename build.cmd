@@ -3,7 +3,12 @@ setlocal EnableExtensions
 
 cd /d "%~dp0"
 set "ROOT=%CD%"
-set "TOOLS=%ROOT%\tools"
+if "%LOCALAPPDATA%"=="" (
+	echo error: LOCALAPPDATA is not available.
+	exit /b 1
+)
+set "NYLON_HOME=%LOCALAPPDATA%\Temp\nylon"
+set "TOOLS=%NYLON_HOME%\tools"
 set "DOWNLOADS=%TOOLS%\downloads"
 set "BUILD=%ROOT%\build"
 set "BIN=%ROOT%\bin"
@@ -49,7 +54,7 @@ set "WIMLIB_DIR=%MEDIA_TOOLS%\wimlib"
 if /I "%~1"=="clean" (
 	if exist "%BUILD%" rmdir /s /q "%BUILD%"
 	if exist "%BIN%" rmdir /s /q "%BIN%"
-	echo Clean complete. Portable tools were kept.
+	echo Clean complete. Persistent tools and caches were kept in %NYLON_HOME%.
 	exit /b 0
 )
 
@@ -66,6 +71,7 @@ for %%T in (curl.exe tar.exe certutil.exe) do (
 	)
 )
 
+if not exist "%NYLON_HOME%" mkdir "%NYLON_HOME%"
 if not exist "%TOOLS%" mkdir "%TOOLS%"
 if not exist "%DOWNLOADS%" mkdir "%DOWNLOADS%"
 if not exist "%MEDIA_TOOLS%" mkdir "%MEDIA_TOOLS%"
@@ -160,6 +166,7 @@ if not exist "%BIN%\nylon.exe" (
 
 echo.
 echo Build complete: %BIN%\nylon.exe
+echo Persistent state: %NYLON_HOME%
 echo Scan directory: bin\nylon.exe scan ^<expanded-windows-image^>
 echo Scan ISO:       bin\nylon.exe scan ^<windows.iso^> [--index ^<number^>]
 exit /b 0
