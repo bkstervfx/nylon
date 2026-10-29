@@ -52,6 +52,7 @@ target_link_libraries(nylon PRIVATE bcrypt)
 target_link_options(nylon PRIVATE
 	-static
 	-fuse-ld=lld
+	-municode
 	-mguard=cf
 	-Wl,--gc-sections
 	-Wl,--dynamicbase
