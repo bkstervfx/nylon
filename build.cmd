@@ -21,6 +21,7 @@ set "SQLITE_VERSION=3.54.1"
 set "SQLITE_SOURCE_ID=555e07ef33f69a0957d24d8e555b702464a131d6f1607f4c3c1e4551e8e6ca76"
 set "SQLITE_ARCHIVE=sqlite-amalgamation-3540100.zip"
 set "SQLITE_URL=https://www.sqlite.org/2026/sqlite-amalgamation-3540100.zip"
+set "SQLITE_SHA256=0a9c8e34352dad46006aa82836d5383bff9dc6bc9ce5a60553c05aa30e6ad1f9"
 set "SQLITE_ZIP=%DOWNLOADS%\%SQLITE_ARCHIVE%"
 set "SQLITE_DIR=%TOOLS%\sqlite"
 set "SQLITE_EXTRACTED=%TOOLS%\sqlite-amalgamation-3540100"
@@ -232,24 +233,22 @@ if errorlevel 1 (
 exit /b 0
 
 :ensure_sqlite
-if exist "%SQLITE_DIR%\sqlite3.c" if exist "%SQLITE_DIR%\sqlite3.h" (
-	findstr /I /C:"%SQLITE_SOURCE_ID%" "%SQLITE_DIR%\sqlite3.h" >nul
-	if not errorlevel 1 exit /b 0
+if exist "%SQLITE_DIR%\sqlite3.c" if exist "%SQLITE_DIR%\sqlite3.h" if exist "%SQLITE_ZIP%" (
+	call :verify_sha256 "%SQLITE_ZIP%" "%SQLITE_SHA256%"
+	if not errorlevel 1 (
+		findstr /I /C:"%SQLITE_SOURCE_ID%" "%SQLITE_DIR%\sqlite3.c" >nul
+		if not errorlevel 1 (
+			findstr /I /C:"%SQLITE_SOURCE_ID%" "%SQLITE_DIR%\sqlite3.h" >nul
+			if not errorlevel 1 exit /b 0
+		)
+	)
 )
 
 if exist "%SQLITE_DIR%" rmdir /s /q "%SQLITE_DIR%"
 if exist "%SQLITE_EXTRACTED%" rmdir /s /q "%SQLITE_EXTRACTED%"
 
-if not exist "%SQLITE_ZIP%" (
-	echo Downloading SQLite %SQLITE_VERSION% amalgamation...
-	curl.exe --fail --location --retry 3 --output "%SQLITE_ZIP%.tmp" "%SQLITE_URL%"
-	if errorlevel 1 (
-		del /q "%SQLITE_ZIP%.tmp" >nul 2>nul
-		echo error: SQLite download failed.
-		exit /b 1
-	)
-	move /y "%SQLITE_ZIP%.tmp" "%SQLITE_ZIP%" >nul
-)
+call :download_verified "%SQLITE_ZIP%" "%SQLITE_URL%" "%SQLITE_SHA256%" "SQLite %SQLITE_VERSION% amalgamation"
+if errorlevel 1 exit /b 1
 
 echo Extracting SQLite...
 tar.exe -xf "%SQLITE_ZIP%" -C "%TOOLS%"
@@ -263,15 +262,25 @@ if not exist "%SQLITE_EXTRACTED%\sqlite3.c" (
 	echo error: SQLite archive layout was not recognized.
 	exit /b 1
 )
+if not exist "%SQLITE_EXTRACTED%\sqlite3.h" (
+	echo error: SQLite archive did not contain sqlite3.h.
+	exit /b 1
+)
 
 mkdir "%SQLITE_DIR%" >nul 2>nul
 copy /y "%SQLITE_EXTRACTED%\sqlite3.c" "%SQLITE_DIR%\sqlite3.c" >nul
 copy /y "%SQLITE_EXTRACTED%\sqlite3.h" "%SQLITE_DIR%\sqlite3.h" >nul
 rmdir /s /q "%SQLITE_EXTRACTED%"
 
+findstr /I /C:"%SQLITE_SOURCE_ID%" "%SQLITE_DIR%\sqlite3.c" >nul
+if errorlevel 1 (
+	echo error: SQLite C source identity verification failed.
+	rmdir /s /q "%SQLITE_DIR%"
+	exit /b 1
+)
 findstr /I /C:"%SQLITE_SOURCE_ID%" "%SQLITE_DIR%\sqlite3.h" >nul
 if errorlevel 1 (
-	echo error: SQLite source identity verification failed.
+	echo error: SQLite header identity verification failed.
 	rmdir /s /q "%SQLITE_DIR%"
 	exit /b 1
 )
