@@ -25,8 +25,10 @@ class registry_state_t
 public:
 	void reset();
 	void hive(std::string_view name);
-	void key(std::string_view path);
-	void values(std::size_t count) noexcept;
+	void batch(
+		std::uint64_t keys,
+		std::uint64_t values,
+		std::string_view detail = {});
 	[[nodiscard]] registry_snapshot_t snapshot() const;
 
 private:
