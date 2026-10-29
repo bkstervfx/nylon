@@ -2,6 +2,7 @@
 #define NYLON_REGISTRY_HIVE_IMPL_HPP
 
 #include <map>
+#include <set>
 #include <span>
 #include <vector>
 
@@ -17,6 +18,7 @@ using detail::equal_ordinal_ignore_case;
 using detail::hive_header_size;
 using detail::inline_data_flag;
 using detail::invalid_cell_offset;
+using detail::max_big_data_segment_size;
 using detail::max_subkey_list_depth;
 using detail::nk_compressed_name;
 using detail::ordinal_less_t;
@@ -34,6 +36,7 @@ struct hive_t::impl_t
 	platform::mapped_file_t file;
 	std::uint32_t root_offset = 0;
 	std::uint32_t data_size = 0;
+	std::size_t cell_count = 0;
 	std::vector<hbin_range_t> hbins;
 	mutable std::map<std::wstring, std::uint32_t, ordinal_less_t> key_cache;
 
@@ -190,6 +193,13 @@ struct hive_t::impl_t
 		}
 
 		const std::size_t count = count_result.value();
+		if (count > cell_count)
+		{
+			return result_t<std::vector<std::uint32_t>>::failure(
+				"Registry subkey list count exceeds hive cell count",
+				ERROR_BADDB);
+		}
+
 		std::vector<std::uint32_t> result;
 
 		if ((first == 'l' && second == 'f') || (first == 'l' && second == 'h'))
@@ -254,10 +264,22 @@ struct hive_t::impl_t
 							nested.error().code);
 					}
 
+					if (nested.value().size() > cell_count - result.size())
+					{
+						return result_t<std::vector<std::uint32_t>>::failure(
+							"Registry subkey index expands beyond hive cell count",
+							ERROR_BADDB);
+					}
 					result.insert(result.end(), nested.value().begin(), nested.value().end());
 				}
 				else
 				{
+					if (result.size() >= cell_count)
+					{
+						return result_t<std::vector<std::uint32_t>>::failure(
+							"Registry subkey index expands beyond hive cell count",
+							ERROR_BADDB);
+					}
 					result.push_back(offset.value());
 				}
 			}
@@ -285,9 +307,11 @@ struct hive_t::impl_t
 
 		const auto key = key_result.value();
 
-		if (key.size() < 0x4CU)
+		if (key.size() < 0x4CU ||
+			std::to_integer<unsigned char>(key[0]) != 'n' ||
+			std::to_integer<unsigned char>(key[1]) != 'k')
 		{
-			return result_t<std::vector<std::uint32_t>>::failure("Registry key cell is truncated", ERROR_BADDB);
+			return result_t<std::vector<std::uint32_t>>::failure("Registry key cell is malformed", ERROR_BADDB);
 		}
 
 		auto count = read_number<std::uint32_t>(key, 0x14U, "Registry subkey count");
@@ -302,6 +326,10 @@ struct hive_t::impl_t
 		{
 			return result_t<std::vector<std::uint32_t>>::success({});
 		}
+		if (static_cast<std::size_t>(count.value()) > cell_count)
+		{
+			return result_t<std::vector<std::uint32_t>>::failure("Registry subkey count exceeds hive cell count", ERROR_BADDB);
+		}
 
 		auto offsets = subkey_offsets_from_list(list.value());
 
@@ -315,6 +343,34 @@ struct hive_t::impl_t
 			return result_t<std::vector<std::uint32_t>>::failure(
 				"Registry subkey index count does not match key metadata",
 				ERROR_BADDB);
+		}
+
+		std::set<std::uint32_t> unique_offsets;
+		for (const std::uint32_t child_offset : offsets.value())
+		{
+			if (!unique_offsets.insert(child_offset).second)
+			{
+				return result_t<std::vector<std::uint32_t>>::failure("Registry subkey index contains duplicate cells", ERROR_BADDB);
+			}
+
+			auto child_result = cell(child_offset);
+			if (!child_result.ok())
+			{
+				return result_t<std::vector<std::uint32_t>>::failure(child_result.error().message, child_result.error().code);
+			}
+			const auto child = child_result.value();
+			if (child.size() < 0x14U ||
+				std::to_integer<unsigned char>(child[0]) != 'n' ||
+				std::to_integer<unsigned char>(child[1]) != 'k')
+			{
+				return result_t<std::vector<std::uint32_t>>::failure("Registry subkey reference is not an nk cell", ERROR_BADDB);
+			}
+
+			auto parent = read_number<std::uint32_t>(child, 0x10U, "Registry subkey parent offset");
+			if (!parent.ok() || parent.value() != key_offset)
+			{
+				return result_t<std::vector<std::uint32_t>>::failure("Registry subkey parent link is inconsistent", ERROR_BADDB);
+			}
 		}
 
 		return offsets;
@@ -424,6 +480,10 @@ struct hive_t::impl_t
 		{
 			return result_t<std::vector<std::uint32_t>>::success({});
 		}
+		if (static_cast<std::size_t>(count.value()) > cell_count)
+		{
+			return result_t<std::vector<std::uint32_t>>::failure("Registry value count exceeds hive cell count", ERROR_BADDB);
+		}
 
 		auto list_result = cell(list_offset.value());
 
@@ -442,6 +502,7 @@ struct hive_t::impl_t
 
 		std::vector<std::uint32_t> result;
 		result.reserve(value_count);
+		std::set<std::uint32_t> unique_offsets;
 
 		for (std::size_t index = 0; index < value_count; ++index)
 		{
@@ -450,6 +511,10 @@ struct hive_t::impl_t
 			if (!offset.ok())
 			{
 				return result_t<std::vector<std::uint32_t>>::failure(offset.error().message, offset.error().code);
+			}
+			if (!unique_offsets.insert(offset.value()).second)
+			{
+				return result_t<std::vector<std::uint32_t>>::failure("Registry value list contains duplicate cells", ERROR_BADDB);
 			}
 
 			result.push_back(offset.value());
@@ -465,6 +530,10 @@ struct hive_t::impl_t
 		if (data_size == 0)
 		{
 			return result_t<std::vector<std::byte>>::success({});
+		}
+		if (data_size > this->data_size)
+		{
+			return result_t<std::vector<std::byte>>::failure("Registry value data size exceeds hive data region", ERROR_BADDB);
 		}
 
 		auto data_cell = cell(data_offset);
@@ -482,7 +551,7 @@ struct hive_t::impl_t
 				std::vector<std::byte>(payload.begin(), payload.begin() + static_cast<std::ptrdiff_t>(data_size)));
 		}
 
-		if (payload.size() < 8U ||
+		if (data_size <= max_big_data_segment_size || payload.size() < 8U ||
 			std::to_integer<unsigned char>(payload[0]) != 'd' ||
 			std::to_integer<unsigned char>(payload[1]) != 'b')
 		{
@@ -495,6 +564,13 @@ struct hive_t::impl_t
 		if (!segment_count.ok() || !segment_list.ok())
 		{
 			return result_t<std::vector<std::byte>>::failure("Registry big-data header is truncated", ERROR_BADDB);
+		}
+
+		const std::size_t expected_segments =
+			(static_cast<std::size_t>(data_size) - 1U) / max_big_data_segment_size + 1U;
+		if (segment_count.value() != expected_segments)
+		{
+			return result_t<std::vector<std::byte>>::failure("Registry big-data segment count does not match value size", ERROR_BADDB);
 		}
 
 		auto list_cell = cell(segment_list.value());
@@ -515,7 +591,7 @@ struct hive_t::impl_t
 		std::vector<std::byte> result;
 		result.reserve(data_size);
 
-		for (std::size_t index = 0; index < count && result.size() < data_size; ++index)
+		for (std::size_t index = 0; index < count; ++index)
 		{
 			auto segment_offset = read_number<std::uint32_t>(list, index * sizeof(std::uint32_t), "Registry big-data segment offset");
 
@@ -532,7 +608,11 @@ struct hive_t::impl_t
 			}
 
 			const std::size_t remaining = static_cast<std::size_t>(data_size) - result.size();
-			const std::size_t take = std::min(remaining, segment.value().size());
+			const std::size_t take = std::min(remaining, max_big_data_segment_size);
+			if (segment.value().size() < take)
+			{
+				return result_t<std::vector<std::byte>>::failure("Registry big-data segment is shorter than expected", ERROR_BADDB);
+			}
 			result.insert(
 				result.end(),
 				segment.value().begin(),
