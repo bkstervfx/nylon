@@ -14,6 +14,11 @@
 #include "../image/image.hpp"
 #include "../result.hpp"
 
+namespace nylon::progress
+{
+class registry_state_t;
+}
+
 namespace nylon::registry
 {
 
@@ -72,7 +77,8 @@ private:
 
 status_t scan_all(
 	const image::image_t& image,
-	database::database_t& database);
+	database::database_t& database,
+	progress::registry_state_t* progress = nullptr);
 
 }
 
