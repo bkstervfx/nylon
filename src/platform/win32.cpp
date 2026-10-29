@@ -110,13 +110,30 @@ result_t<mapped_file_t> mapped_file_t::open_readonly(const std::filesystem::path
 		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
 		nullptr,
 		OPEN_EXISTING,
-		FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN,
+		FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN | FILE_FLAG_OPEN_REPARSE_POINT,
 		nullptr));
 
 	if (!file)
 	{
 		const auto error = win32_error("CreateFileW failed while opening a read-only mapping");
 		return result_t<mapped_file_t>::failure(error.message, error.code);
+	}
+
+	FILE_ATTRIBUTE_TAG_INFO tag_info{};
+	if (!GetFileInformationByHandleEx(
+		file.get(),
+		FileAttributeTagInfo,
+		&tag_info,
+		static_cast<DWORD>(sizeof(tag_info))))
+	{
+		const auto error = win32_error("GetFileInformationByHandleEx failed for read-only mapping");
+		return result_t<mapped_file_t>::failure(error.message, error.code);
+	}
+	if ((tag_info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+	{
+		return result_t<mapped_file_t>::failure(
+			"Refusing to follow a reparse point while reading an offline image",
+			ERROR_ACCESS_DENIED);
 	}
 
 	LARGE_INTEGER size{};
