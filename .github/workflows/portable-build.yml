@@ -36,3 +36,4 @@ jobs:
           if errorlevel 1 (type smoke-output.txt & exit /b 1)
           findstr /C:"NOT NULL constraint failed" smoke-output.txt >nul
           if not errorlevel 1 (type smoke-output.txt & exit /b 1)
+          exit /b 0
