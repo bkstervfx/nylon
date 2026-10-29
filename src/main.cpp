@@ -256,6 +256,13 @@ int wmain(int argc, wchar_t** argv)
 		std::cout << "cache: " << (prepared.cache_hit ? "hit" : "created") << '\n';
 	}
 
+	status = nylon::media::verify_prepared_cache(prepared);
+	if (!status.ok())
+	{
+		print_error(status.error());
+		return 1;
+	}
+
 	auto image_result = nylon::image::image_t::open(prepared.image_root);
 	if (!image_result.ok())
 	{
