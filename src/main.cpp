@@ -1,3 +1,5 @@
+#include <Windows.h>
+
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
@@ -6,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "database/database.hpp"
 #include "image/image.hpp"
@@ -117,13 +120,7 @@ bool has_iso_extension(const std::filesystem::path& path)
 bool looks_like_project_root(const std::filesystem::path& candidate)
 {
 	std::error_code error;
-	if (std::filesystem::is_regular_file(candidate / L"build.cmd", error) && !error)
-	{
-		return true;
-	}
-
-	error.clear();
-	return std::filesystem::is_directory(candidate / L"tools" / L"media", error) && !error;
+	return std::filesystem::is_regular_file(candidate / L"build.cmd", error) && !error;
 }
 
 nylon::result_t<std::filesystem::path> project_root()
@@ -152,6 +149,33 @@ nylon::result_t<std::filesystem::path> project_root()
 	}
 
 	return nylon::result_t<std::filesystem::path>::success(parent);
+}
+
+nylon::result_t<std::filesystem::path> persistent_runtime_root()
+{
+	const DWORD required = GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0);
+	if (required == 0)
+	{
+		return nylon::result_t<std::filesystem::path>::failure(
+			"LOCALAPPDATA is not available",
+			GetLastError());
+	}
+
+	std::wstring local_appdata(required, L'\0');
+	const DWORD written = GetEnvironmentVariableW(
+		L"LOCALAPPDATA",
+		local_appdata.data(),
+		required);
+	if (written == 0 || written >= required)
+	{
+		return nylon::result_t<std::filesystem::path>::failure(
+			"Unable to read LOCALAPPDATA",
+			GetLastError());
+	}
+
+	local_appdata.resize(written);
+	return nylon::result_t<std::filesystem::path>::success(
+		std::filesystem::path(std::move(local_appdata)) / L"Temp" / L"nylon");
 }
 
 nylon::status_t create_runtime_directories(
@@ -212,10 +236,18 @@ int wmain(int argc, wchar_t** argv)
 		return 1;
 	}
 
+	auto runtime_root_result = persistent_runtime_root();
+	if (!runtime_root_result.ok())
+	{
+		print_error(runtime_root_result.error());
+		return 1;
+	}
+
 	const auto nylon_root = root_result.value();
+	const auto runtime_root = runtime_root_result.value();
 	const auto output_root = nylon_root / L"output";
-	const auto temp_root = nylon_root / L"temp";
-	const auto cache_root = nylon_root / L"cache";
+	const auto temp_root = runtime_root / L"temp";
+	const auto cache_root = runtime_root / L"cache";
 	const auto database_path = output_root / L"image.db";
 
 	auto status = create_runtime_directories(output_root, temp_root, cache_root);
@@ -244,7 +276,7 @@ int wmain(int argc, wchar_t** argv)
 	auto prepared_result = nylon::media::prepare(
 		cli.input,
 		nylon::media::prepare_options_t{
-			nylon_root,
+			runtime_root,
 			cache_root,
 			temp_root,
 			cli.image_index
