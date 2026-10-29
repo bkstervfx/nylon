@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "../platform/win32.hpp"
+#include "../progress/progress.hpp"
 
 namespace nylon::registry
 {
@@ -95,7 +96,9 @@ result_t<std::optional<std::string>> value_text(const value_t& value)
 std::string join_key(std::string_view left, std::string_view right)
 {
 	if (right.empty()) return std::string(left);
-	std::string value(left);
+	std::string value;
+	value.reserve(left.size() + 1U + right.size());
+	value.append(left);
 	value.push_back('\\');
 	value.append(right);
 	return value;
@@ -146,7 +149,8 @@ status_t scan_hive(
 	const std::filesystem::path& path,
 	std::string_view hive_name,
 	bool required,
-	database::database_t& database)
+	database::database_t& database,
+	progress::registry_state_t* progress_state)
 {
 	auto hive_result = hive_t::open(path);
 	if (!hive_result.ok())
@@ -156,6 +160,8 @@ status_t scan_hive(
 		if (required) return status_t::failure(hive_result.error().message, hive_result.error().code);
 		return status_t::success();
 	}
+
+	if (progress_state != nullptr) progress_state->hive(hive_name);
 
 	auto hive = std::move(hive_result).value();
 	auto hive_object = database.object("registry_hive", std::string(hive_name), std::string(hive_name));
@@ -177,6 +183,8 @@ status_t scan_hive(
 
 		const std::string object_key = key_object_key(hive_name, current_utf8.value());
 		const std::string display_path = join_key(hive_name, current_utf8.value());
+		if (progress_state != nullptr) progress_state->key(display_path);
+
 		std::string display_name;
 		if (current.path.empty())
 		{
@@ -193,12 +201,15 @@ status_t scan_hive(
 
 		auto values_result = hive.values(current.path);
 		if (!values_result.ok()) return status_t::failure(values_result.error().message, values_result.error().code);
+		if (progress_state != nullptr) progress_state->values(values_result.value().size());
 		for (const auto& value : values_result.value())
 		{
 			auto value_name = platform::utf8(value.name);
 			if (!value_name.ok()) return status_t::failure(value_name.error().message, value_name.error().code);
 			const std::string value_key = value_object_key(hive_name, current_utf8.value(), value_name.value());
-			std::string value_path = display_path;
+			std::string value_path;
+			value_path.reserve(display_path.size() + 2U + value_name.value().size());
+			value_path.append(display_path);
 			value_path.append("::");
 			value_path.append(value_name.value());
 			auto value_object = database.object(
@@ -267,7 +278,8 @@ status_t scan_optional_hive_path(
 	const image::image_t& image,
 	database::database_t& database,
 	const std::filesystem::path& path,
-	std::set<std::wstring, ordinal_less_t>& scanned)
+	std::set<std::wstring, ordinal_less_t>& scanned,
+	progress::registry_state_t* progress_state)
 {
 	const std::wstring normalized = path.lexically_normal().native();
 	if (!scanned.insert(normalized).second) return status_t::success();
@@ -275,7 +287,7 @@ status_t scan_optional_hive_path(
 	if (!relative.ok()) return status_t::failure(relative.error().message, relative.error().code);
 	std::string label = "HIVE:";
 	label.append(relative.value());
-	return scan_hive(path, label, false, database);
+	return scan_hive(path, label, false, database, progress_state);
 }
 
 }
@@ -297,7 +309,10 @@ std::string value_object_key(std::string_view hive, std::string_view relative_pa
 	return result;
 }
 
-status_t scan_all(const image::image_t& image, database::database_t& database)
+status_t scan_all(
+	const image::image_t& image,
+	database::database_t& database,
+	progress::registry_state_t* progress_state)
 {
 	struct hive_spec_t { const wchar_t* relative_path; const char* name; bool required; };
 	const hive_spec_t known_hives[] = {
@@ -327,7 +342,7 @@ status_t scan_all(const image::image_t& image, database::database_t& database)
 			continue;
 		}
 		scanned.insert(path.lexically_normal().native());
-		auto result = scan_hive(path, specification.name, specification.required, database);
+		auto result = scan_hive(path, specification.name, specification.required, database, progress_state);
 		if (!result.ok()) return result;
 	}
 
@@ -345,7 +360,7 @@ status_t scan_all(const image::image_t& image, database::database_t& database)
 	std::sort(candidates.begin(), candidates.end());
 	for (const auto& candidate : candidates)
 	{
-		auto result = scan_optional_hive_path(image, database, candidate, scanned);
+		auto result = scan_optional_hive_path(image, database, candidate, scanned, progress_state);
 		if (!result.ok()) return result;
 	}
 
@@ -382,7 +397,7 @@ status_t scan_all(const image::image_t& image, database::database_t& database)
 		std::sort(candidates.begin(), candidates.end());
 		for (const auto& candidate : candidates)
 		{
-			auto result = scan_optional_hive_path(image, database, candidate, scanned);
+			auto result = scan_optional_hive_path(image, database, candidate, scanned, progress_state);
 			if (!result.ok()) return result;
 		}
 	}
