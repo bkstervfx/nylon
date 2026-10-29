@@ -250,7 +250,6 @@ result_t<std::vector<std::wstring>> hive_t::subkeys(std::wstring_view path) cons
 
 	std::vector<std::wstring> result;
 	result.reserve(offsets.value().size());
-	const std::wstring parent(path);
 
 	for (const std::uint32_t offset : offsets.value())
 	{
@@ -261,13 +260,6 @@ result_t<std::vector<std::wstring>> hive_t::subkeys(std::wstring_view path) cons
 			return result_t<std::vector<std::wstring>>::failure(name.error().message, name.error().code);
 		}
 
-		std::wstring full = parent;
-		if (!full.empty())
-		{
-			full.push_back(L'\\');
-		}
-		full.append(name.value());
-		impl_->key_cache.emplace(std::move(full), offset);
 		result.push_back(std::move(name).value());
 	}
 
