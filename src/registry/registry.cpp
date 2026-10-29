@@ -30,6 +30,7 @@ struct pending_key_t
 };
 
 using detail::decode_utf16;
+using detail::equal_ordinal_ignore_case;
 using detail::ordinal_less_t;
 using detail::read_number;
 
@@ -100,6 +101,20 @@ std::string join_key(std::string_view left, std::string_view right)
 	return value;
 }
 
+void append_identity_component(std::string& output, std::string_view value)
+{
+	output.append(std::to_string(value.size()));
+	output.push_back(':');
+	output.append(value);
+}
+
+bool is_user_hive_candidate(const std::filesystem::path& path)
+{
+	const auto filename = path.filename().native();
+	return equal_ordinal_ignore_case(filename, L"NTUSER.DAT") ||
+		equal_ordinal_ignore_case(filename, L"UsrClass.dat");
+}
+
 status_t record_hive_error(
 	database::database_t& database,
 	std::string_view hive_name,
@@ -161,8 +176,9 @@ status_t scan_hive(
 		if (!current_utf8.ok()) return status_t::failure(current_utf8.error().message, current_utf8.error().code);
 
 		const std::string object_key = key_object_key(hive_name, current_utf8.value());
+		const std::string display_path = join_key(hive_name, current_utf8.value());
 		const std::string display_name = current.path.empty() ? std::string(hive_name) : current_utf8.value();
-		auto key_object = database.object("registry_key", object_key, display_name, object_key, current.parent);
+		auto key_object = database.object("registry_key", object_key, display_name, display_path, current.parent);
 		if (!key_object.ok()) return status_t::failure(key_object.error().message, key_object.error().code);
 
 		auto values_result = hive.values(current.path);
@@ -172,7 +188,15 @@ status_t scan_hive(
 			auto value_name = platform::utf8(value.name);
 			if (!value_name.ok()) return status_t::failure(value_name.error().message, value_name.error().code);
 			const std::string value_key = value_object_key(hive_name, current_utf8.value(), value_name.value());
-			auto value_object = database.object("registry_value", value_key, value_name.value().empty() ? "(Default)" : value_name.value(), value_key, key_object.value());
+			std::string value_path = display_path;
+			value_path.append("::");
+			value_path.append(value_name.value());
+			auto value_object = database.object(
+				"registry_value",
+				value_key,
+				value_name.value().empty() ? "(Default)" : value_name.value(),
+				value_path,
+				key_object.value());
 			if (!value_object.ok()) return status_t::failure(value_object.error().message, value_object.error().code);
 
 			auto raw = database.registry_data(value_object.value(), value.type, std::span<const std::byte>(value.data.data(), value.data.size()));
@@ -248,14 +272,18 @@ status_t scan_optional_hive_path(
 
 std::string key_object_key(std::string_view hive, std::string_view relative_path)
 {
-	return join_key(hive, relative_path);
+	std::string result("K");
+	append_identity_component(result, hive);
+	append_identity_component(result, relative_path);
+	return result;
 }
 
 std::string value_object_key(std::string_view hive, std::string_view relative_path, std::string_view value_name)
 {
-	std::string result = key_object_key(hive, relative_path);
-	result.append("::");
-	result.append(value_name);
+	std::string result("V");
+	append_identity_component(result, hive);
+	append_identity_component(result, relative_path);
+	append_identity_component(result, value_name);
 	return result;
 }
 
@@ -334,7 +362,12 @@ status_t scan_all(const image::image_t& image, database::database_t& database)
 				continue;
 			}
 			std::error_code entry_error;
-			if (iterator->is_regular_file(entry_error) && !entry_error && has_primary_hive_header(iterator->path())) candidates.push_back(iterator->path());
+			if (iterator->is_regular_file(entry_error) && !entry_error &&
+				is_user_hive_candidate(iterator->path()) &&
+				has_primary_hive_header(iterator->path()))
+			{
+				candidates.push_back(iterator->path());
+			}
 		}
 		if (error) return status_t::failure("Unable to enumerate offline user registry hives", error.value());
 		std::sort(candidates.begin(), candidates.end());
