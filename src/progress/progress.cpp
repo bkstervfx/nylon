@@ -14,7 +14,6 @@ namespace nylon::progress
 namespace
 {
 
-constexpr std::uint64_t detail_sample_mask = 127U;
 constexpr auto refresh_interval = std::chrono::milliseconds(125);
 
 std::string count_text(std::uint64_t value)
@@ -101,18 +100,14 @@ void registry_state_t::hive(std::string_view name)
 	set_detail(name);
 }
 
-void registry_state_t::key(std::string_view path)
+void registry_state_t::batch(
+	std::uint64_t keys,
+	std::uint64_t values,
+	std::string_view detail)
 {
-	const std::uint64_t count = keys_.fetch_add(1U, std::memory_order_relaxed) + 1U;
-	if (count <= 8U || (count & detail_sample_mask) == 0U)
-	{
-		set_detail(path);
-	}
-}
-
-void registry_state_t::values(std::size_t count) noexcept
-{
-	values_.fetch_add(static_cast<std::uint64_t>(count), std::memory_order_relaxed);
+	if (keys != 0U) keys_.fetch_add(keys, std::memory_order_relaxed);
+	if (values != 0U) values_.fetch_add(values, std::memory_order_relaxed);
+	if (!detail.empty()) set_detail(detail);
 }
 
 registry_snapshot_t registry_state_t::snapshot() const
