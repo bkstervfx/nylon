@@ -45,13 +45,13 @@ jobs:
           if errorlevel 1 (type iso-smoke-output.txt & exit /b 1)
           exit /b 0
 
-      - name: Smoke-test immutable cache long-path verification
-        if: ${{ hashFiles('tools/media/wimlib/wimlib-imagex.exe') != '' }}
+      - name: Smoke-test persistent immutable cache long-path verification
         shell: pwsh
         run: |
           [System.IO.File]::WriteAllText((Join-Path $PWD.Path 'cache-smoke.iso'), 'cache-verification')
           $hash = (Get-FileHash -Algorithm SHA256 (Join-Path $PWD.Path 'cache-smoke.iso')).Hash.ToLowerInvariant()
-          $entry = Join-Path $PWD.Path "cache\images\$hash\index-1"
+          $stateRoot = Join-Path $env:LOCALAPPDATA 'Temp\nylon'
+          $entry = Join-Path $stateRoot "cache\images\$hash\index-1"
           $config = Join-Path $entry 'image\Windows\System32\config'
           [System.IO.Directory]::CreateDirectory($config) | Out-Null
           [System.IO.File]::WriteAllText((Join-Path $config 'SYSTEM'), '')
@@ -114,7 +114,11 @@ jobs:
           }
           if (-not $output.Contains('cache: hit')) {
             Write-Host $output
-            throw 'Cache smoke test did not use the prepared cache'
+            throw 'Cache smoke test did not reuse the persistent LocalAppData cache'
+          }
+          if ($output.Contains('Portable wimlib runtime is missing')) {
+            Write-Host $output
+            throw 'Cache hit incorrectly required the wimlib runtime'
           }
           if ($output.Contains('Unable to enumerate immutable ISO cache')) {
             Write-Host $output
