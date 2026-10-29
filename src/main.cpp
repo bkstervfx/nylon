@@ -10,6 +10,7 @@
 #include "database/database.hpp"
 #include "image/image.hpp"
 #include "media/media.hpp"
+#include "platform/hash.hpp"
 #include "platform/win32.hpp"
 #include "registry/registry.hpp"
 
@@ -231,6 +232,23 @@ int wmain(int argc, wchar_t** argv)
 
 	if (prepared.source_kind == "iso")
 	{
+		if (!prepared.cache_hit)
+		{
+			auto stable_hash = nylon::platform::sha256_file(cli.input);
+			if (!stable_hash.ok())
+			{
+				print_error(stable_hash.error());
+				return 1;
+			}
+			if (stable_hash.value() != prepared.iso_sha256)
+			{
+				print_error(nylon::error_t{
+					"ISO changed while it was being prepared; retry with a stable input file",
+					ERROR_FILE_INVALID });
+				return 1;
+			}
+		}
+
 		std::cout << "iso sha256: " << prepared.iso_sha256 << '\n';
 		std::cout << "image index: " << prepared.image_index;
 		if (!prepared.image_name.empty()) std::cout << " (" << prepared.image_name << ")";
