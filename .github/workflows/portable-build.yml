@@ -88,13 +88,15 @@ jobs:
 
           $stdout = Join-Path $PWD.Path 'cache-smoke-stdout.txt'
           $stderr = Join-Path $PWD.Path 'cache-smoke-stderr.txt'
-          $process = Start-Process \
-            -FilePath (Join-Path $PWD.Path 'bin\nylon.exe') \
-            -ArgumentList @('scan', (Join-Path $PWD.Path 'cache-smoke.iso'), '--index', '1') \
-            -RedirectStandardOutput $stdout \
-            -RedirectStandardError $stderr \
-            -Wait \
-            -PassThru
+          $startInfo = @{
+            FilePath = Join-Path $PWD.Path 'bin\nylon.exe'
+            ArgumentList = @('scan', (Join-Path $PWD.Path 'cache-smoke.iso'), '--index', '1')
+            RedirectStandardOutput = $stdout
+            RedirectStandardError = $stderr
+            Wait = $true
+            PassThru = $true
+          }
+          $process = Start-Process @startInfo
           $output = (Get-Content $stdout -Raw) + "`n" + (Get-Content $stderr -Raw)
           if ($process.ExitCode -eq 0) {
             Write-Host $output
