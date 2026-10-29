@@ -17,6 +17,8 @@ namespace nylon::platform
 namespace
 {
 
+constexpr std::size_t max_create_process_command_line = 32766U;
+
 std::wstring quote_argument(std::wstring_view argument)
 {
 	const bool needs_quotes = argument.empty() ||
@@ -100,6 +102,15 @@ result_t<std::uint32_t> run_process(
 	{
 		command_line.push_back(L' ');
 		command_line.append(quote_argument(argument));
+		if (command_line.size() > max_create_process_command_line)
+		{
+			return result_t<std::uint32_t>::failure("Subprocess command line exceeds the Windows limit", ERROR_FILENAME_EXCED_RANGE);
+		}
+	}
+
+	if (command_line.size() > max_create_process_command_line)
+	{
+		return result_t<std::uint32_t>::failure("Subprocess command line exceeds the Windows limit", ERROR_FILENAME_EXCED_RANGE);
 	}
 
 	std::vector<wchar_t> mutable_command_line(
