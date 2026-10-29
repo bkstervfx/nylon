@@ -22,6 +22,7 @@ namespace
 {
 
 constexpr std::size_t max_registry_key_depth = 512U;
+constexpr std::uint64_t progress_batch_size = 128U;
 
 struct pending_key_t
 {
@@ -167,6 +168,8 @@ status_t scan_hive(
 	auto hive_object = database.object("registry_hive", std::string(hive_name), std::string(hive_name));
 	if (!hive_object.ok()) return status_t::failure(hive_object.error().message, hive_object.error().code);
 
+	std::uint64_t unpublished_keys = 0U;
+	std::uint64_t unpublished_values = 0U;
 	std::deque<pending_key_t> pending;
 	pending.push_back(pending_key_t{ L"", hive_object.value(), 0U });
 	while (!pending.empty())
@@ -183,7 +186,6 @@ status_t scan_hive(
 
 		const std::string object_key = key_object_key(hive_name, current_utf8.value());
 		const std::string display_path = join_key(hive_name, current_utf8.value());
-		if (progress_state != nullptr) progress_state->key(display_path);
 
 		std::string display_name;
 		if (current.path.empty())
@@ -201,7 +203,15 @@ status_t scan_hive(
 
 		auto values_result = hive.values(current.path);
 		if (!values_result.ok()) return status_t::failure(values_result.error().message, values_result.error().code);
-		if (progress_state != nullptr) progress_state->values(values_result.value().size());
+		++unpublished_keys;
+		unpublished_values += static_cast<std::uint64_t>(values_result.value().size());
+		if (progress_state != nullptr && unpublished_keys >= progress_batch_size)
+		{
+			progress_state->batch(unpublished_keys, unpublished_values, display_path);
+			unpublished_keys = 0U;
+			unpublished_values = 0U;
+		}
+
 		for (const auto& value : values_result.value())
 		{
 			auto value_name = platform::utf8(value.name);
@@ -247,6 +257,11 @@ status_t scan_hive(
 			child.append(subkey);
 			pending.push_back(pending_key_t{ std::move(child), key_object.value(), current.depth + 1U });
 		}
+	}
+
+	if (progress_state != nullptr && (unpublished_keys != 0U || unpublished_values != 0U))
+	{
+		progress_state->batch(unpublished_keys, unpublished_values);
 	}
 	return status_t::success();
 }
