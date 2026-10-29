@@ -36,6 +36,75 @@ jobs:
           if errorlevel 1 (type iso-smoke-output.txt & exit /b 1)
           exit /b 0
 
+      - name: Smoke-test immutable cache long-path verification
+        shell: pwsh
+        run: |
+          [System.IO.File]::WriteAllText((Join-Path $PWD.Path 'cache-smoke.iso'), 'cache-verification')
+          $hash = (Get-FileHash -Algorithm SHA256 (Join-Path $PWD.Path 'cache-smoke.iso')).Hash.ToLowerInvariant()
+          $entry = Join-Path $PWD.Path "cache\images\$hash\index-1"
+          $config = Join-Path $entry 'image\Windows\System32\config'
+          [System.IO.Directory]::CreateDirectory($config) | Out-Null
+          [System.IO.File]::WriteAllText((Join-Path $config 'SYSTEM'), '')
+          [System.IO.File]::WriteAllText((Join-Path $config 'SOFTWARE'), '')
+          $manifest = @(
+            'format=1'
+            'complete=1'
+            "iso_sha256=$hash"
+            'image_index=1'
+            'image_count=1'
+            'image_name=Cache smoke'
+            'iso_extractor=7zip-26.05'
+            'wimlib=1.14.5'
+            'wim_apply_flags=--no-acls --no-attributes --rpfix'
+            'immutable=1'
+          ) -join "`n"
+          [System.IO.File]::WriteAllText((Join-Path $entry 'manifest.txt'), $manifest)
+
+          $longPath = "\\?\$entry\image\LongPath"
+          [System.IO.Directory]::CreateDirectory($longPath) | Out-Null
+          $longPaths = @($longPath)
+          for ($i = 0; $i -lt 12; ++$i) {
+            $longPath = [System.IO.Path]::Combine($longPath, "segment-$i-xxxxxxxxxxxxxxxxxxxxxxxx")
+            [System.IO.Directory]::CreateDirectory($longPath) | Out-Null
+            $longPaths += $longPath
+          }
+          $leaf = [System.IO.Path]::Combine($longPath, 'leaf.txt')
+          [System.IO.File]::WriteAllText($leaf, 'x')
+
+          $normalPaths = @(
+            $entry,
+            (Join-Path $entry 'image'),
+            (Join-Path $entry 'image\Windows'),
+            (Join-Path $entry 'image\Windows\System32'),
+            $config,
+            (Join-Path $config 'SYSTEM'),
+            (Join-Path $config 'SOFTWARE'),
+            (Join-Path $entry 'manifest.txt')
+          )
+          foreach ($path in ($normalPaths + $longPaths + @($leaf))) {
+            $attributes = [System.IO.File]::GetAttributes($path)
+            [System.IO.File]::SetAttributes($path, $attributes -bor [System.IO.FileAttributes]::ReadOnly)
+          }
+
+          & .\bin\nylon.exe scan .\cache-smoke.iso --index 1 *> cache-smoke-output.txt
+          if ($LASTEXITCODE -eq 0) {
+            Get-Content cache-smoke-output.txt
+            throw 'Cache smoke test unexpectedly succeeded'
+          }
+          $output = Get-Content cache-smoke-output.txt -Raw
+          if (-not $output.Contains('cache: hit')) {
+            Get-Content cache-smoke-output.txt
+            throw 'Cache smoke test did not use the prepared cache'
+          }
+          if ($output.Contains('Unable to enumerate immutable ISO cache')) {
+            Get-Content cache-smoke-output.txt
+            throw 'Cache verification failed while traversing a long path'
+          }
+          if (-not $output.Contains('Image root does not contain Windows\System32\ntoskrnl.exe')) {
+            Get-Content cache-smoke-output.txt
+            throw 'Cache verification did not advance to image validation'
+          }
+
       - name: Smoke-test scanner database startup
         shell: cmd
         run: |
