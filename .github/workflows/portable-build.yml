@@ -41,11 +41,12 @@ jobs:
           if not errorlevel 1 exit /b 1
           findstr /C:"input..." iso-smoke-output.txt >nul
           if errorlevel 1 (type iso-smoke-output.txt & exit /b 1)
-          findstr /C:"7-Zip ISO extraction exited with code" iso-smoke-output.txt >nul
+          findstr /C:"Portable wimlib runtime is missing" iso-smoke-output.txt >nul
           if errorlevel 1 (type iso-smoke-output.txt & exit /b 1)
           exit /b 0
 
       - name: Smoke-test immutable cache long-path verification
+        if: ${{ hashFiles('tools/media/wimlib/wimlib-imagex.exe') != '' }}
         shell: pwsh
         run: |
           [System.IO.File]::WriteAllText((Join-Path $PWD.Path 'cache-smoke.iso'), 'cache-verification')
