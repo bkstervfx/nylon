@@ -10,7 +10,6 @@
 #include "database/database.hpp"
 #include "image/image.hpp"
 #include "media/media.hpp"
-#include "platform/hash.hpp"
 #include "platform/win32.hpp"
 #include "registry/registry.hpp"
 
@@ -101,6 +100,17 @@ nylon::result_t<cli_options_t> parse_cli(int argc, wchar_t** argv)
 	}
 
 	return nylon::result_t<cli_options_t>::success(std::move(options));
+}
+
+bool has_iso_extension(const std::filesystem::path& path)
+{
+	const auto extension = path.extension().native();
+	return CompareStringOrdinal(
+		extension.c_str(),
+		static_cast<int>(extension.size()),
+		L".iso",
+		4,
+		TRUE) == CSTR_EQUAL;
 }
 
 bool looks_like_project_root(const std::filesystem::path& candidate)
@@ -214,6 +224,18 @@ int wmain(int argc, wchar_t** argv)
 		return 1;
 	}
 
+	nylon::platform::unique_handle_t iso_read_lock;
+	if (has_iso_extension(cli.input))
+	{
+		auto lock_result = nylon::platform::open_read_lock(cli.input);
+		if (!lock_result.ok())
+		{
+			print_error(lock_result.error());
+			return 1;
+		}
+		iso_read_lock = std::move(lock_result).value();
+	}
+
 	std::cout << "input...\n";
 	auto prepared_result = nylon::media::prepare(
 		cli.input,
@@ -232,23 +254,6 @@ int wmain(int argc, wchar_t** argv)
 
 	if (prepared.source_kind == "iso")
 	{
-		if (!prepared.cache_hit)
-		{
-			auto stable_hash = nylon::platform::sha256_file(cli.input);
-			if (!stable_hash.ok())
-			{
-				print_error(stable_hash.error());
-				return 1;
-			}
-			if (stable_hash.value() != prepared.iso_sha256)
-			{
-				print_error(nylon::error_t{
-					"ISO changed while it was being prepared; retry with a stable input file",
-					ERROR_FILE_INVALID });
-				return 1;
-			}
-		}
-
 		std::cout << "iso sha256: " << prepared.iso_sha256 << '\n';
 		std::cout << "image index: " << prepared.image_index;
 		if (!prepared.image_name.empty()) std::cout << " (" << prepared.image_name << ")";
