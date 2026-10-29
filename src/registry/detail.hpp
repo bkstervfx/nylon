@@ -21,6 +21,7 @@ namespace nylon::registry::detail
 constexpr std::size_t hive_header_size = 0x1000U;
 constexpr std::size_t hbin_header_size = 0x20U;
 constexpr std::size_t hbin_alignment = 0x1000U;
+constexpr std::size_t max_big_data_segment_size = 16344U;
 constexpr std::uint16_t nk_compressed_name = 0x0020U;
 constexpr std::uint16_t vk_compressed_name = 0x0001U;
 constexpr std::uint32_t inline_data_flag = 0x80000000U;
