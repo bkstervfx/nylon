@@ -225,7 +225,10 @@ int wmain(int argc, wchar_t** argv)
 	}
 
 	nylon::platform::unique_handle_t iso_read_lock;
-	if (has_iso_extension(cli.input))
+	std::error_code input_type_error;
+	if (has_iso_extension(cli.input) &&
+		std::filesystem::is_regular_file(cli.input, input_type_error) &&
+		!input_type_error)
 	{
 		auto lock_result = nylon::platform::open_read_lock(cli.input);
 		if (!lock_result.ok())
