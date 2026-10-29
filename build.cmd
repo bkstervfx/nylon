@@ -7,6 +7,7 @@ if "%LOCALAPPDATA%"=="" (
 	echo error: LOCALAPPDATA is not available.
 	exit /b 1
 )
+
 set "NYLON_HOME=%LOCALAPPDATA%\Temp\nylon"
 set "TOOLS=%NYLON_HOME%\tools"
 set "DOWNLOADS=%TOOLS%\downloads"
@@ -63,17 +64,8 @@ if /I not "%PROCESSOR_ARCHITECTURE%"=="AMD64" if /I not "%PROCESSOR_ARCHITEW6432
 	exit /b 1
 )
 
-for %%T in (curl.exe tar.exe certutil.exe) do (
-	where %%T >nul 2>nul
-	if errorlevel 1 (
-		echo error: %%T is required. It is included with Windows 11.
-		exit /b 1
-	)
-)
-
 if not exist "%NYLON_HOME%" mkdir "%NYLON_HOME%"
 if not exist "%TOOLS%" mkdir "%TOOLS%"
-if not exist "%DOWNLOADS%" mkdir "%DOWNLOADS%"
 if not exist "%MEDIA_TOOLS%" mkdir "%MEDIA_TOOLS%"
 if not exist "%BUILD%" mkdir "%BUILD%"
 if not exist "%BIN%" mkdir "%BIN%"
@@ -177,7 +169,17 @@ set "RSP_PATH=%RSP_PATH:\=/%"
 >> "%RSP%" echo "%RSP_PATH%"
 exit /b 0
 
+:require_command
+where %~1 >nul 2>nul
+if errorlevel 1 (
+	echo error: %~1 is required for dependency bootstrap. It is included with Windows 11.
+	exit /b 1
+)
+exit /b 0
+
 :verify_sha256
+call :require_command certutil.exe
+if errorlevel 1 exit /b 1
 certutil.exe -hashfile "%~1" SHA256 | findstr /I /C:"%~2" >nul
 exit /b %ERRORLEVEL%
 
@@ -189,12 +191,19 @@ set "DV_NAME=%~4"
 
 if exist "%DV_PATH%" (
 	call :verify_sha256 "%DV_PATH%" "%DV_SHA%"
-	if not errorlevel 1 exit /b 0
+	if not errorlevel 1 (
+		echo Using cached download: %DV_NAME%
+		exit /b 0
+	)
 	del /q "%DV_PATH%" >nul 2>nul
 )
 
+call :require_command curl.exe
+if errorlevel 1 exit /b 1
+if not exist "%DOWNLOADS%" mkdir "%DOWNLOADS%"
+
 echo Downloading %DV_NAME%...
-curl.exe --fail --location --retry 3 --output "%DV_PATH%.tmp" "%DV_URL%"
+curl.exe --fail --location --retry 3 --connect-timeout 20 --output "%DV_PATH%.tmp" "%DV_URL%"
 if errorlevel 1 (
 	del /q "%DV_PATH%.tmp" >nul 2>nul
 	echo error: %DV_NAME% download failed.
@@ -211,10 +220,19 @@ if errorlevel 1 (
 exit /b 0
 
 :ensure_llvm
-if exist "%LLVM_DIR%\bin\x86_64-w64-mingw32-clang++.exe" exit /b 0
-if exist "%LLVM_DIR%\bin\clang++.exe" exit /b 0
+if exist "%LLVM_DIR%\bin\x86_64-w64-mingw32-clang++.exe" (
+	echo Using cached LLVM-MinGW %LLVM_VERSION%.
+	exit /b 0
+)
+if exist "%LLVM_DIR%\bin\clang++.exe" (
+	echo Using cached LLVM-MinGW %LLVM_VERSION%.
+	exit /b 0
+)
 
 call :download_verified "%LLVM_ZIP%" "%LLVM_URL%" "%LLVM_SHA256%" "LLVM-MinGW %LLVM_VERSION%"
+if errorlevel 1 exit /b 1
+
+call :require_command tar.exe
 if errorlevel 1 exit /b 1
 
 if exist "%LLVM_EXTRACTED%" rmdir /s /q "%LLVM_EXTRACTED%"
@@ -240,21 +258,25 @@ if errorlevel 1 (
 exit /b 0
 
 :ensure_sqlite
-if exist "%SQLITE_DIR%\sqlite3.c" if exist "%SQLITE_DIR%\sqlite3.h" if exist "%SQLITE_ZIP%" (
-	call :verify_sha256 "%SQLITE_ZIP%" "%SQLITE_SHA256%"
+if exist "%SQLITE_DIR%\sqlite3.c" if exist "%SQLITE_DIR%\sqlite3.h" (
+	findstr /I /C:"%SQLITE_SOURCE_ID%" "%SQLITE_DIR%\sqlite3.c" >nul
 	if not errorlevel 1 (
-		findstr /I /C:"%SQLITE_SOURCE_ID%" "%SQLITE_DIR%\sqlite3.c" >nul
+		findstr /I /C:"%SQLITE_SOURCE_ID%" "%SQLITE_DIR%\sqlite3.h" >nul
 		if not errorlevel 1 (
-			findstr /I /C:"%SQLITE_SOURCE_ID%" "%SQLITE_DIR%\sqlite3.h" >nul
-			if not errorlevel 1 exit /b 0
+			echo Using cached SQLite %SQLITE_VERSION%.
+			exit /b 0
 		)
 	)
+	echo Cached SQLite sources failed identity validation; rebuilding cache.
 )
 
 if exist "%SQLITE_DIR%" rmdir /s /q "%SQLITE_DIR%"
 if exist "%SQLITE_EXTRACTED%" rmdir /s /q "%SQLITE_EXTRACTED%"
 
 call :download_verified "%SQLITE_ZIP%" "%SQLITE_URL%" "%SQLITE_SHA256%" "SQLite %SQLITE_VERSION% amalgamation"
+if errorlevel 1 exit /b 1
+
+call :require_command tar.exe
 if errorlevel 1 exit /b 1
 
 echo Extracting SQLite...
@@ -294,7 +316,10 @@ if errorlevel 1 (
 exit /b 0
 
 :ensure_7zip
-if exist "%SEVENZIP_DIR%\7z.exe" if exist "%SEVENZIP_DIR%\7z.dll" exit /b 0
+if exist "%SEVENZIP_DIR%\7z.exe" if exist "%SEVENZIP_DIR%\7z.dll" (
+	echo Using cached 7-Zip %SEVENZIP_VERSION%.
+	exit /b 0
+)
 
 call :download_verified "%SEVENZIP_BOOTSTRAP_PATH%" "%SEVENZIP_BOOTSTRAP_URL%" "%SEVENZIP_BOOTSTRAP_SHA256%" "7-Zip bootstrap %SEVENZIP_VERSION%"
 if errorlevel 1 exit /b 1
@@ -326,11 +351,18 @@ if exist "%WIMLIB_DIR%\wimlib-imagex.exe" if exist "%WIMLIB_DIR%\libwim-15.dll" 
 	call :verify_sha256 "%WIMLIB_DIR%\wimlib-imagex.exe" "%WIMLIB_EXE_SHA256%"
 	if not errorlevel 1 (
 		call :verify_sha256 "%WIMLIB_DIR%\libwim-15.dll" "%WIMLIB_DLL_SHA256%"
-		if not errorlevel 1 exit /b 0
+		if not errorlevel 1 (
+			echo Using cached wimlib %WIMLIB_VERSION%.
+			exit /b 0
+		)
 	)
+	echo Cached wimlib failed SHA-256 validation; rebuilding cache.
 )
 
 call :download_verified "%WIMLIB_ZIP%" "%WIMLIB_URL%" "%WIMLIB_SHA256%" "wimlib %WIMLIB_VERSION%"
+if errorlevel 1 exit /b 1
+
+call :require_command tar.exe
 if errorlevel 1 exit /b 1
 
 if exist "%WIMLIB_DIR%" rmdir /s /q "%WIMLIB_DIR%"
