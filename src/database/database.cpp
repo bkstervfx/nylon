@@ -87,7 +87,6 @@ database_t::~database_t()
 database_t::database_t(database_t&& other) noexcept
 	: database_(std::exchange(other.database_, nullptr)),
 	  object_upsert_(std::move(other.object_upsert_)),
-	  object_select_(std::move(other.object_select_)),
 	  property_insert_(std::move(other.property_insert_)),
 	  edge_insert_(std::move(other.edge_insert_)),
 	  file_metadata_upsert_(std::move(other.file_metadata_upsert_)),
@@ -105,7 +104,6 @@ database_t& database_t::operator=(database_t&& other) noexcept
 		reset();
 		database_ = std::exchange(other.database_, nullptr);
 		object_upsert_ = std::move(other.object_upsert_);
-		object_select_ = std::move(other.object_select_);
 		property_insert_ = std::move(other.property_insert_);
 		edge_insert_ = std::move(other.edge_insert_);
 		file_metadata_upsert_ = std::move(other.file_metadata_upsert_);
@@ -126,7 +124,6 @@ void database_t::reset() noexcept
 	file_metadata_upsert_.reset();
 	edge_insert_.reset();
 	property_insert_.reset();
-	object_select_.reset();
 	object_upsert_.reset();
 
 	in_transaction_ = false;
@@ -200,6 +197,7 @@ PRAGMA synchronous=NORMAL;
 PRAGMA temp_store=MEMORY;
 PRAGMA foreign_keys=OFF;
 PRAGMA cache_size=-65536;
+PRAGMA wal_autocheckpoint=0;
 
 CREATE TABLE IF NOT EXISTS objects (
 	id INTEGER PRIMARY KEY,
@@ -291,13 +289,9 @@ status_t database_t::prepare_cached_statements()
 		"ON CONFLICT(kind, object_key) DO UPDATE SET "
 		"name=CASE WHEN excluded.name<>'' THEN excluded.name ELSE objects.name END, "
 		"path=CASE WHEN excluded.path<>'' THEN excluded.path ELSE objects.path END, "
-		"parent_id=COALESCE(objects.parent_id, excluded.parent_id);");
+		"parent_id=COALESCE(objects.parent_id, excluded.parent_id) "
+		"RETURNING id;");
 
-	if (!status.ok()) return status;
-
-	status = assign(
-		object_select_,
-		"SELECT id FROM objects WHERE kind=?1 AND object_key=?2;");
 	if (!status.ok()) return status;
 
 	status = assign(
@@ -443,29 +437,24 @@ result_t<object_id_t> database_t::object(
 		return result_t<object_id_t>::failure(failure.error().message, failure.error().code);
 	}
 
-	status = step_done_and_reset(object_upsert_.get());
-	if (!status.ok()) return result_t<object_id_t>::failure(status.error().message, status.error().code);
-
-	status = reset_statement(object_select_.get());
-	if (!status.ok()) return result_t<object_id_t>::failure(status.error().message, status.error().code);
-
-	status = bind_text(object_select_.get(), 1, kind);
-	if (!status.ok()) return result_t<object_id_t>::failure(status.error().message, status.error().code);
-	status = bind_text(object_select_.get(), 2, key);
-	if (!status.ok()) return result_t<object_id_t>::failure(status.error().message, status.error().code);
-
-	rc = sqlite3_step(object_select_.get());
-
+	rc = sqlite3_step(object_upsert_.get());
 	if (rc != SQLITE_ROW)
 	{
-		const auto failure = sqlite_failure(database_, "Object lookup failed", rc);
-		reset_statement(object_select_.get());
+		const auto failure = sqlite_failure(database_, "Object upsert did not return an id", rc);
+		reset_statement(object_upsert_.get());
 		return result_t<object_id_t>::failure(failure.error().message, failure.error().code);
 	}
 
-	const auto id = sqlite3_column_int64(object_select_.get(), 0);
-	status = reset_statement(object_select_.get());
+	const object_id_t id = sqlite3_column_int64(object_upsert_.get(), 0);
+	rc = sqlite3_step(object_upsert_.get());
+	if (rc != SQLITE_DONE)
+	{
+		const auto failure = sqlite_failure(database_, "Object upsert did not complete", rc);
+		reset_statement(object_upsert_.get());
+		return result_t<object_id_t>::failure(failure.error().message, failure.error().code);
+	}
 
+	status = reset_statement(object_upsert_.get());
 	if (!status.ok())
 	{
 		return result_t<object_id_t>::failure(status.error().message, status.error().code);
@@ -545,8 +534,8 @@ status_t database_t::file_metadata(
 
 	for (int index = 0; index < 6; ++index)
 	{
-		const int rc = sqlite3_bind_int64(file_metadata_upsert_.get(), index + 1, values[index]);
-		if (rc != SQLITE_OK) return sqlite_failure(database_, "sqlite3_bind file metadata failed", rc);
+		const int bind_rc = sqlite3_bind_int64(file_metadata_upsert_.get(), index + 1, values[index]);
+		if (bind_rc != SQLITE_OK) return sqlite_failure(database_, "sqlite3_bind file metadata failed", bind_rc);
 	}
 
 	return step_done_and_reset(file_metadata_upsert_.get());
@@ -580,7 +569,7 @@ status_t database_t::registry_data(
 				3,
 				data.data(),
 				static_cast<int>(data.size()),
-				SQLITE_TRANSIENT);
+				SQLITE_STATIC);
 		}
 	}
 
@@ -684,16 +673,17 @@ result_t<statement_t> database_t::prepare(std::string_view sql)
 		return result_t<statement_t>::failure("SQLite statement is too large");
 	}
 
-	const int rc = sqlite3_prepare_v2(
+	const int rc = sqlite3_prepare_v3(
 		database_,
 		sql.data(),
 		static_cast<int>(sql.size()),
+		SQLITE_PREPARE_PERSISTENT,
 		&statement,
 		nullptr);
 
 	if (rc != SQLITE_OK)
 	{
-		const auto failure = sqlite_failure(database_, "sqlite3_prepare_v2 failed", rc);
+		const auto failure = sqlite_failure(database_, "sqlite3_prepare_v3 failed", rc);
 		return result_t<statement_t>::failure(failure.error().message, failure.error().code);
 	}
 
