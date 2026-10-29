@@ -24,6 +24,18 @@ jobs:
         shell: cmd
         run: if not exist bin\nylon.exe exit /b 1
 
+      - name: Smoke-test ISO hashing path
+        shell: cmd
+        run: |
+          echo deliberately-not-an-iso> smoke.iso
+          bin\nylon.exe scan smoke.iso > iso-smoke-output.txt 2>&1
+          if not errorlevel 1 exit /b 1
+          findstr /C:"input..." iso-smoke-output.txt >nul
+          if errorlevel 1 (type iso-smoke-output.txt & exit /b 1)
+          findstr /C:"7-Zip ISO extraction exited with code" iso-smoke-output.txt >nul
+          if errorlevel 1 (type iso-smoke-output.txt & exit /b 1)
+          exit /b 0
+
       - name: Smoke-test scanner database startup
         shell: cmd
         run: |

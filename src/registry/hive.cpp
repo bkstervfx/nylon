@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <set>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -139,6 +140,7 @@ result_t<hive_t> hive_t::open(const std::filesystem::path& path)
 	}
 
 	std::vector<impl_t::hbin_range_t> hbins;
+	std::set<std::uint32_t> cell_offsets;
 	std::size_t cell_count = 0;
 	std::size_t relative = 0;
 	while (relative < data_size.value())
@@ -182,6 +184,10 @@ result_t<hive_t> hive_t::open(const std::filesystem::path& path)
 			{
 				return result_t<hive_t>::failure("Registry hbin cell crosses its bin boundary", ERROR_BADDB);
 			}
+			if (!cell_offsets.insert(static_cast<std::uint32_t>(cell_relative)).second)
+			{
+				return result_t<hive_t>::failure("Registry hive contains duplicate cell boundaries", ERROR_BADDB);
+			}
 			++cell_count;
 			cell_relative += cell_size;
 		}
@@ -208,6 +214,7 @@ result_t<hive_t> hive_t::open(const std::filesystem::path& path)
 	impl->data_size = data_size.value();
 	impl->cell_count = cell_count;
 	impl->hbins = std::move(hbins);
+	impl->cell_offsets = std::move(cell_offsets);
 	impl->key_cache.emplace(L"", root.value());
 
 	auto root_name = impl->key_name(root.value());
@@ -243,7 +250,6 @@ result_t<std::vector<std::wstring>> hive_t::subkeys(std::wstring_view path) cons
 
 	std::vector<std::wstring> result;
 	result.reserve(offsets.value().size());
-	const std::wstring parent(path);
 
 	for (const std::uint32_t offset : offsets.value())
 	{
@@ -254,13 +260,6 @@ result_t<std::vector<std::wstring>> hive_t::subkeys(std::wstring_view path) cons
 			return result_t<std::vector<std::wstring>>::failure(name.error().message, name.error().code);
 		}
 
-		std::wstring full = parent;
-		if (!full.empty())
-		{
-			full.push_back(L'\\');
-		}
-		full.append(name.value());
-		impl_->key_cache.emplace(std::move(full), offset);
 		result.push_back(std::move(name).value());
 	}
 

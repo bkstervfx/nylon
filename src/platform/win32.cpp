@@ -107,7 +107,7 @@ result_t<mapped_file_t> mapped_file_t::open_readonly(const std::filesystem::path
 	unique_handle_t file(CreateFileW(
 		native.value().c_str(),
 		GENERIC_READ,
-		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+		FILE_SHARE_READ,
 		nullptr,
 		OPEN_EXISTING,
 		FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN | FILE_FLAG_OPEN_REPARSE_POINT,

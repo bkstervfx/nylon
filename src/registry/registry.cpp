@@ -177,7 +177,17 @@ status_t scan_hive(
 
 		const std::string object_key = key_object_key(hive_name, current_utf8.value());
 		const std::string display_path = join_key(hive_name, current_utf8.value());
-		const std::string display_name = current.path.empty() ? std::string(hive_name) : current_utf8.value();
+		std::string display_name;
+		if (current.path.empty())
+		{
+			display_name = std::string(hive_name);
+		}
+		else
+		{
+			const std::size_t separator = current_utf8.value().find_last_of('\\');
+			display_name = current_utf8.value().substr(
+				separator == std::string::npos ? 0U : separator + 1U);
+		}
 		auto key_object = database.object("registry_key", object_key, display_name, display_path, current.parent);
 		if (!key_object.ok()) return status_t::failure(key_object.error().message, key_object.error().code);
 
@@ -260,7 +270,7 @@ status_t scan_optional_hive_path(
 	std::set<std::wstring, ordinal_less_t>& scanned)
 {
 	const std::wstring normalized = path.lexically_normal().native();
-	if (!scanned.insert(normalized).second || !has_primary_hive_header(path)) return status_t::success();
+	if (!scanned.insert(normalized).second) return status_t::success();
 	auto relative = image.relative_utf8(path);
 	if (!relative.ok()) return status_t::failure(relative.error().message, relative.error().code);
 	std::string label = "HIVE:";
@@ -363,8 +373,7 @@ status_t scan_all(const image::image_t& image, database::database_t& database)
 			}
 			std::error_code entry_error;
 			if (iterator->is_regular_file(entry_error) && !entry_error &&
-				is_user_hive_candidate(iterator->path()) &&
-				has_primary_hive_header(iterator->path()))
+				is_user_hive_candidate(iterator->path()))
 			{
 				candidates.push_back(iterator->path());
 			}

@@ -38,6 +38,7 @@ struct hive_t::impl_t
 	std::uint32_t data_size = 0;
 	std::size_t cell_count = 0;
 	std::vector<hbin_range_t> hbins;
+	std::set<std::uint32_t> cell_offsets;
 	mutable std::map<std::wstring, std::uint32_t, ordinal_less_t> key_cache;
 
 	[[nodiscard]] std::span<const std::byte> bytes() const noexcept
@@ -54,6 +55,12 @@ struct hive_t::impl_t
 		{
 			return result_t<std::span<const std::byte>>::failure(
 				"Registry cell offset is invalid",
+				ERROR_BADDB);
+		}
+		if (!cell_offsets.contains(offset))
+		{
+			return result_t<std::span<const std::byte>>::failure(
+				"Registry reference does not point to a cell boundary",
 				ERROR_BADDB);
 		}
 
@@ -418,6 +425,8 @@ struct hive_t::impl_t
 			}
 
 			bool found = false;
+			std::uint32_t matched_child = 0;
+			std::wstring matched_path;
 
 			for (const std::uint32_t child : children.value())
 			{
@@ -433,14 +442,18 @@ struct hive_t::impl_t
 				std::wstring candidate = resolved_path;
 				if (!candidate.empty()) candidate.push_back(L'\\');
 				candidate.append(name.value());
-				key_cache.emplace(candidate, child);
 
 				if (equal_ordinal_ignore_case(name.value(), segment))
 				{
-					current = child;
-					resolved_path = std::move(candidate);
+					if (found)
+					{
+						return result_t<std::uint32_t>::failure(
+							"Registry key contains duplicate subkey names",
+							ERROR_BADDB);
+					}
 					found = true;
-					break;
+					matched_child = child;
+					matched_path = std::move(candidate);
 				}
 			}
 
@@ -451,6 +464,8 @@ struct hive_t::impl_t
 					ERROR_FILE_NOT_FOUND);
 			}
 
+			current = matched_child;
+			resolved_path = std::move(matched_path);
 			cursor = separator == std::wstring_view::npos ? path.size() : separator + 1U;
 		}
 
