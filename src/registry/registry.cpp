@@ -177,7 +177,17 @@ status_t scan_hive(
 
 		const std::string object_key = key_object_key(hive_name, current_utf8.value());
 		const std::string display_path = join_key(hive_name, current_utf8.value());
-		const std::string display_name = current.path.empty() ? std::string(hive_name) : current_utf8.value();
+		std::string display_name;
+		if (current.path.empty())
+		{
+			display_name = std::string(hive_name);
+		}
+		else
+		{
+			const std::size_t separator = current_utf8.value().find_last_of('\\');
+			display_name = current_utf8.value().substr(
+				separator == std::string::npos ? 0U : separator + 1U);
+		}
 		auto key_object = database.object("registry_key", object_key, display_name, display_path, current.parent);
 		if (!key_object.ok()) return status_t::failure(key_object.error().message, key_object.error().code);
 
