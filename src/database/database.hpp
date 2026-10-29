@@ -108,7 +108,6 @@ private:
 
 	sqlite3* database_ = nullptr;
 	statement_t object_upsert_;
-	statement_t object_select_;
 	statement_t property_insert_;
 	statement_t edge_insert_;
 	statement_t file_metadata_upsert_;
