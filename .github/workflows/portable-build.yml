@@ -20,6 +20,10 @@ jobs:
         shell: cmd
         run: build.cmd
 
+      - name: Report SQLite archive SHA-256
+        shell: cmd
+        run: certutil.exe -hashfile tools\downloads\sqlite-amalgamation-3540100.zip SHA256
+
       - name: Verify executable
         shell: cmd
         run: if not exist bin\nylon.exe exit /b 1
