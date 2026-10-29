@@ -20,14 +20,18 @@ namespace nylon::registry
 namespace
 {
 
+constexpr std::size_t max_registry_key_depth = 512U;
+
 struct pending_key_t
 {
 	std::wstring path;
 	database::object_id_t parent = 0;
+	std::size_t depth = 0;
 };
 
 using detail::decode_utf16;
 using detail::ordinal_less_t;
+using detail::read_number;
 
 result_t<std::optional<std::string>> value_text(const value_t& value)
 {
@@ -96,19 +100,44 @@ std::string join_key(std::string_view left, std::string_view right)
 	return value;
 }
 
-status_t scan_hive(const std::filesystem::path& path, std::string_view hive_name, bool required, database::database_t& database)
+status_t record_hive_error(
+	database::database_t& database,
+	std::string_view hive_name,
+	bool required,
+	const error_t& error)
+{
+	auto error_object = database.object(
+		"audit_error",
+		std::string("registry:") + std::string(hive_name),
+		std::string(hive_name));
+	if (!error_object.ok())
+	{
+		return status_t::failure(error_object.error().message, error_object.error().code);
+	}
+
+	for (const auto& [key, value] : {
+		std::pair<std::string_view, std::string>{ "collector", "registry" },
+		{ "message", error.message },
+		{ "code", std::to_string(error.code) },
+		{ "required", required ? "true" : "false" } })
+	{
+		auto status = database.property(error_object.value(), key, value);
+		if (!status.ok()) return status;
+	}
+	return status_t::success();
+}
+
+status_t scan_hive(
+	const std::filesystem::path& path,
+	std::string_view hive_name,
+	bool required,
+	database::database_t& database)
 {
 	auto hive_result = hive_t::open(path);
 	if (!hive_result.ok())
 	{
-		auto error_object = database.object("audit_error", std::string("registry:") + std::string(hive_name), std::string(hive_name));
-		if (error_object.ok())
-		{
-			database.property(error_object.value(), "collector", "registry");
-			database.property(error_object.value(), "message", hive_result.error().message);
-			database.property(error_object.value(), "code", std::to_string(hive_result.error().code));
-			database.property(error_object.value(), "required", required ? "true" : "false");
-		}
+		auto record_status = record_hive_error(database, hive_name, required, hive_result.error());
+		if (!record_status.ok()) return record_status;
 		if (required) return status_t::failure(hive_result.error().message, hive_result.error().code);
 		return status_t::success();
 	}
@@ -118,11 +147,16 @@ status_t scan_hive(const std::filesystem::path& path, std::string_view hive_name
 	if (!hive_object.ok()) return status_t::failure(hive_object.error().message, hive_object.error().code);
 
 	std::deque<pending_key_t> pending;
-	pending.push_back(pending_key_t{ L"", hive_object.value() });
+	pending.push_back(pending_key_t{ L"", hive_object.value(), 0U });
 	while (!pending.empty())
 	{
 		auto current = std::move(pending.front());
 		pending.pop_front();
+		if (current.depth > max_registry_key_depth)
+		{
+			return status_t::failure("Registry key hierarchy exceeds the supported depth", ERROR_BADDB);
+		}
+
 		auto current_utf8 = platform::utf8(current.path);
 		if (!current_utf8.ok()) return status_t::failure(current_utf8.error().message, current_utf8.error().code);
 
@@ -156,29 +190,53 @@ status_t scan_hive(const std::filesystem::path& path, std::string_view hive_name
 
 		auto subkeys_result = hive.subkeys(current.path);
 		if (!subkeys_result.ok()) return status_t::failure(subkeys_result.error().message, subkeys_result.error().code);
+		if (!subkeys_result.value().empty() && current.depth >= max_registry_key_depth)
+		{
+			return status_t::failure("Registry key hierarchy exceeds the supported depth", ERROR_BADDB);
+		}
+
 		for (const auto& subkey : subkeys_result.value())
 		{
 			std::wstring child = current.path;
 			if (!child.empty()) child.push_back(L'\\');
 			child.append(subkey);
-			pending.push_back(pending_key_t{ std::move(child), key_object.value() });
+			pending.push_back(pending_key_t{ std::move(child), key_object.value(), current.depth + 1U });
 		}
 	}
 	return status_t::success();
 }
 
-bool has_regf_signature(const std::filesystem::path& path)
+bool has_primary_hive_header(const std::filesystem::path& path)
 {
 	auto mapped = platform::mapped_file_t::open_readonly(path);
 	if (!mapped.ok()) return false;
 	const auto bytes = mapped.value().bytes();
-	return bytes.size() >= 4U && std::to_integer<unsigned char>(bytes[0]) == 'r' && std::to_integer<unsigned char>(bytes[1]) == 'e' && std::to_integer<unsigned char>(bytes[2]) == 'g' && std::to_integer<unsigned char>(bytes[3]) == 'f';
+	if (bytes.size() < 0x24U ||
+		std::to_integer<unsigned char>(bytes[0]) != 'r' ||
+		std::to_integer<unsigned char>(bytes[1]) != 'e' ||
+		std::to_integer<unsigned char>(bytes[2]) != 'g' ||
+		std::to_integer<unsigned char>(bytes[3]) != 'f')
+	{
+		return false;
+	}
+
+	auto major = read_number<std::uint32_t>(bytes, 0x14U, "Registry major version");
+	auto minor = read_number<std::uint32_t>(bytes, 0x18U, "Registry minor version");
+	auto type = read_number<std::uint32_t>(bytes, 0x1CU, "Registry file type");
+	auto format = read_number<std::uint32_t>(bytes, 0x20U, "Registry file format");
+	return major.ok() && minor.ok() && type.ok() && format.ok() &&
+		major.value() == 1U && minor.value() >= 3U && minor.value() <= 6U &&
+		type.value() == 0U && format.value() == 1U;
 }
 
-status_t scan_optional_hive_path(const image::image_t& image, database::database_t& database, const std::filesystem::path& path, std::set<std::wstring, ordinal_less_t>& scanned)
+status_t scan_optional_hive_path(
+	const image::image_t& image,
+	database::database_t& database,
+	const std::filesystem::path& path,
+	std::set<std::wstring, ordinal_less_t>& scanned)
 {
 	const std::wstring normalized = path.lexically_normal().native();
-	if (!scanned.insert(normalized).second || !has_regf_signature(path)) return status_t::success();
+	if (!scanned.insert(normalized).second || !has_primary_hive_header(path)) return status_t::success();
 	auto relative = image.relative_utf8(path);
 	if (!relative.ok()) return status_t::failure(relative.error().message, relative.error().code);
 	std::string label = "HIVE:";
@@ -243,7 +301,7 @@ status_t scan_all(const image::image_t& image, database::database_t& database)
 	for (std::filesystem::directory_iterator iterator(config_root, std::filesystem::directory_options::skip_permission_denied, error); !error && iterator != std::filesystem::directory_iterator(); iterator.increment(error))
 	{
 		std::error_code entry_error;
-		if (iterator->is_regular_file(entry_error) && !entry_error && has_regf_signature(iterator->path())) candidates.push_back(iterator->path());
+		if (iterator->is_regular_file(entry_error) && !entry_error && has_primary_hive_header(iterator->path())) candidates.push_back(iterator->path());
 	}
 	if (error) return status_t::failure("Unable to enumerate offline registry config directory", error.value());
 	std::sort(candidates.begin(), candidates.end());
@@ -276,7 +334,7 @@ status_t scan_all(const image::image_t& image, database::database_t& database)
 				continue;
 			}
 			std::error_code entry_error;
-			if (iterator->is_regular_file(entry_error) && !entry_error && has_regf_signature(iterator->path())) candidates.push_back(iterator->path());
+			if (iterator->is_regular_file(entry_error) && !entry_error && has_primary_hive_header(iterator->path())) candidates.push_back(iterator->path());
 		}
 		if (error) return status_t::failure("Unable to enumerate offline user registry hives", error.value());
 		std::sort(candidates.begin(), candidates.end());
