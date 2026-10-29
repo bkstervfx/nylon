@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 
 #include "../platform/win32.hpp"
 
