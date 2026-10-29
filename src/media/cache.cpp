@@ -20,6 +20,35 @@ namespace
 
 constexpr std::size_t max_manifest_bytes = 1024U * 1024U;
 
+class find_handle_t
+{
+public:
+	find_handle_t() noexcept = default;
+	explicit find_handle_t(HANDLE handle) noexcept
+		: handle_(handle)
+	{
+	}
+
+	~find_handle_t()
+	{
+		if (handle_ != INVALID_HANDLE_VALUE)
+		{
+			FindClose(handle_);
+		}
+	}
+
+	find_handle_t(const find_handle_t&) = delete;
+	find_handle_t& operator=(const find_handle_t&) = delete;
+
+	[[nodiscard]] HANDLE get() const noexcept
+	{
+		return handle_;
+	}
+
+private:
+	HANDLE handle_ = INVALID_HANDLE_VALUE;
+};
+
 result_t<std::string> read_manifest(const std::filesystem::path& path)
 {
 	auto attributes = platform::file_attributes(path);
@@ -97,59 +126,91 @@ status_t require_manifest_value(
 	return status_t::success();
 }
 
-status_t require_read_only(const std::filesystem::path& path)
+status_t verify_read_only_native(const std::wstring& path)
 {
-	auto attributes = platform::file_attributes(path);
-	if (!attributes.ok())
+	const DWORD attributes = GetFileAttributesW(path.c_str());
+	if (attributes == INVALID_FILE_ATTRIBUTES)
 	{
-		return status_t::failure(attributes.error().message, attributes.error().code);
+		const auto error = platform::win32_error("Unable to inspect immutable ISO cache path");
+		return status_t::failure(error.message, error.code);
 	}
-	if ((attributes.value() & FILE_ATTRIBUTE_READONLY) == 0)
+	if ((attributes & FILE_ATTRIBUTE_READONLY) == 0)
 	{
 		return status_t::failure("Immutable ISO cache contains a writable path");
 	}
+
+	if ((attributes & FILE_ATTRIBUTE_DIRECTORY) == 0 ||
+		(attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+	{
+		return status_t::success();
+	}
+
+	std::wstring pattern = path;
+	if (!pattern.empty() && pattern.back() != L'\\') pattern.push_back(L'\\');
+	pattern.push_back(L'*');
+
+	WIN32_FIND_DATAW data{};
+	find_handle_t find(FindFirstFileExW(
+		pattern.c_str(),
+		FindExInfoBasic,
+		&data,
+		FindExSearchNameMatch,
+		nullptr,
+		FIND_FIRST_EX_LARGE_FETCH));
+
+	if (find.get() == INVALID_HANDLE_VALUE)
+	{
+		const DWORD code = GetLastError();
+		if (code == ERROR_FILE_NOT_FOUND)
+		{
+			return status_t::success();
+		}
+		return status_t::failure("Unable to enumerate immutable ISO cache", code);
+	}
+
+	for (;;)
+	{
+		const std::wstring_view name(data.cFileName);
+		if (name != L"." && name != L"..")
+		{
+			if ((data.dwFileAttributes & FILE_ATTRIBUTE_READONLY) == 0)
+			{
+				return status_t::failure("Immutable ISO cache contains a writable path");
+			}
+
+			if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 &&
+				(data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0)
+			{
+				std::wstring child = path;
+				if (!child.empty() && child.back() != L'\\') child.push_back(L'\\');
+				child.append(name);
+				auto status = verify_read_only_native(child);
+				if (!status.ok()) return status;
+			}
+		}
+
+		if (!FindNextFileW(find.get(), &data))
+		{
+			const DWORD code = GetLastError();
+			if (code != ERROR_NO_MORE_FILES)
+			{
+				return status_t::failure("Unable to enumerate immutable ISO cache", code);
+			}
+			break;
+		}
+	}
+
 	return status_t::success();
 }
 
 status_t verify_read_only_tree(const std::filesystem::path& root)
 {
-	auto root_status = require_read_only(root);
-	if (!root_status.ok()) return root_status;
-
-	std::error_code error;
-	std::filesystem::recursive_directory_iterator iterator(root, error);
-	const std::filesystem::recursive_directory_iterator end;
-	if (error)
+	auto native = platform::native_path(root);
+	if (!native.ok())
 	{
-		return status_t::failure("Unable to enumerate immutable ISO cache", static_cast<std::uint32_t>(error.value()));
+		return status_t::failure(native.error().message, native.error().code);
 	}
-
-	while (iterator != end)
-	{
-		auto attributes = platform::file_attributes(iterator->path());
-		if (!attributes.ok())
-		{
-			return status_t::failure(attributes.error().message, attributes.error().code);
-		}
-		if ((attributes.value() & FILE_ATTRIBUTE_READONLY) == 0)
-		{
-			return status_t::failure("Immutable ISO cache contains a writable path");
-		}
-		if ((attributes.value() & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
-		{
-			iterator.disable_recursion_pending();
-		}
-
-		iterator.increment(error);
-		if (error)
-		{
-			return status_t::failure(
-				"Unable to enumerate immutable ISO cache",
-				static_cast<std::uint32_t>(error.value()));
-		}
-	}
-
-	return status_t::success();
+	return verify_read_only_native(native.value());
 }
 
 }
