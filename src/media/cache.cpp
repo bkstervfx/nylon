@@ -22,6 +22,17 @@ constexpr std::size_t max_manifest_bytes = 1024U * 1024U;
 
 result_t<std::string> read_manifest(const std::filesystem::path& path)
 {
+	auto attributes = platform::file_attributes(path);
+	if (!attributes.ok())
+	{
+		return result_t<std::string>::failure(attributes.error().message, attributes.error().code);
+	}
+	if ((attributes.value() & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ||
+		(attributes.value() & FILE_ATTRIBUTE_DIRECTORY) != 0)
+	{
+		return result_t<std::string>::failure("Immutable cache manifest is not a regular non-reparse file");
+	}
+
 	std::error_code size_error;
 	const auto size = std::filesystem::file_size(path, size_error);
 	if (size_error || size > max_manifest_bytes ||
