@@ -442,7 +442,6 @@ struct hive_t::impl_t
 				std::wstring candidate = resolved_path;
 				if (!candidate.empty()) candidate.push_back(L'\\');
 				candidate.append(name.value());
-				key_cache.emplace(candidate, child);
 
 				if (equal_ordinal_ignore_case(name.value(), segment))
 				{
