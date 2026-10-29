@@ -33,6 +33,8 @@ struct prepared_input_t
 	std::filesystem::path input,
 	const prepare_options_t& options);
 
+[[nodiscard]] status_t verify_prepared_cache(const prepared_input_t& prepared);
+
 }
 
 #endif
