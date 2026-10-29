@@ -14,7 +14,13 @@ Run from Command Prompt:
 build.cmd
 ```
 
-On the first build, `build.cmd` automatically downloads pinned open-source build/runtime dependencies into the repository's local `tools` directory and verifies their identities before use. This includes LLVM-MinGW, SQLite, 7-Zip and wimlib. Download archives used by the portable build are pinned by SHA-256, and extracted SQLite sources are also checked against the expected SQLite source identity. Later builds reuse the local tools after validating the applicable cached identities.
+On the first build, `build.cmd` automatically downloads pinned open-source build/runtime dependencies and verifies their identities before use. LLVM-MinGW, SQLite, 7-Zip, wimlib and their verified download archives are stored persistently under:
+
+```text
+%LOCALAPPDATA%\Temp\nylon\tools\
+```
+
+Later builds reuse those tools after validating the applicable cached identities. Deleting or recloning the Nylon repository therefore does not force the toolchain or media runtimes to be downloaded again.
 
 The repository can be placed anywhere. Nylon does not depend on `C:\nylon` or on a fixed image directory.
 
@@ -33,7 +39,7 @@ If the ISO contains multiple Windows images, Nylon lists the available indexes i
 bin\nylon.exe scan D:\path\to\Windows.iso --index 6
 ```
 
-## ISO handling and cache
+## ISO handling and persistent cache
 
 Nylon does not mount the ISO and does not use DISM or WIMGAPI mounting. It extracts the ISO as an archive with the local verified 7-Zip runtime, then applies the selected WIM/ESD/SWM image with wimlib using:
 
@@ -43,13 +49,21 @@ Nylon does not mount the ISO and does not use DISM or WIMGAPI mounting. It extra
 
 This intentionally avoids carrying Windows security descriptors, TrustedInstaller ownership and file attributes from the Windows image into Nylon's working copy.
 
-For an ISO input, Nylon holds a read/share lock on the source while it is being hashed and prepared. The ISO is streamed through SHA-256, and final expanded image caches are keyed by that SHA-256 plus the selected image index:
+For an ISO input, Nylon holds a read/share lock on the source while it is being hashed and prepared. The ISO is streamed through SHA-256, and final expanded image caches are keyed by that SHA-256 plus the selected image index. They are stored outside the repository under:
 
 ```text
-cache\images\<iso-sha256>\index-<N>\
+%LOCALAPPDATA%\Temp\nylon\cache\images\<iso-sha256>\index-<N>\
     image\
     manifest.txt
 ```
+
+Temporary ISO preparation work is also kept outside the repository under:
+
+```text
+%LOCALAPPDATA%\Temp\nylon\temp\
+```
+
+This means deleting `C:\nylon`, downloading a fresh copy of the repository, and rebuilding does not delete the expensive expanded ISO cache. A fresh checkout can reuse a valid SHA-256/index cache before 7-Zip or wimlib are needed.
 
 A cache is built in a temporary staging directory, validated, marked read-only and atomically renamed into its final location. Nylon treats a finalized cache as immutable and only reads from it. It never updates an existing finalized entry in place.
 
@@ -59,6 +73,10 @@ The read-only cache policy deliberately does not install restrictive ACLs or Tru
 
 Offline registry files are mapped read-only. Nylon rejects reparse-point traversal for image roots and registry paths, validates REGF base blocks and cell topology, and refuses dirty primary hives that require transaction-log recovery instead of silently interpreting inconsistent data.
 
-When `nylon.exe` is inside this repository's `bin` directory, runtime data is written beside the repository under `output`, `temp` and `cache`. If the executable is moved elsewhere, those folders are created beside the executable instead.
+The repository itself keeps source code, `build`, `bin`, and `output`. The audit database is written to:
 
-The audit database is written to `output\image.db` relative to that runtime root.
+```text
+output\image.db
+```
+
+Persistent Nylon state is kept under `%LOCALAPPDATA%\Temp\nylon`, so removing the repository does not remove cached Windows images or verified portable tools.
