@@ -230,7 +230,7 @@ result_t<std::string> sha256_file(const std::filesystem::path& path)
 	}
 
 	hash_handle_t hash(raw_hash);
-	std::array<UCHAR, 1024U * 1024U> buffer{};
+	std::vector<UCHAR> buffer(1024U * 1024U);
 
 	for (;;)
 	{
