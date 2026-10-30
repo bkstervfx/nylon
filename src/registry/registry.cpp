@@ -4,13 +4,14 @@
 #include <Windows.h>
 
 #include <algorithm>
+#include <charconv>
 #include <cstring>
-#include <deque>
 #include <set>
 #include <span>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "../platform/win32.hpp"
 #include "../progress/progress.hpp"
@@ -26,7 +27,9 @@ constexpr std::uint64_t progress_batch_size = 128U;
 
 struct pending_key_t
 {
-	std::wstring path;
+	std::uint32_t offset = 0;
+	std::string path;
+	std::string name;
 	database::object_id_t parent = 0;
 	std::size_t depth = 0;
 };
@@ -107,7 +110,9 @@ std::string join_key(std::string_view left, std::string_view right)
 
 void append_identity_component(std::string& output, std::string_view value)
 {
-	output.append(std::to_string(value.size()));
+	char length[32]{};
+	const auto converted = std::to_chars(std::begin(length), std::end(length), value.size());
+	output.append(length, converted.ptr);
 	output.push_back(':');
 	output.append(value);
 }
@@ -165,43 +170,44 @@ status_t scan_hive(
 	if (progress_state != nullptr) progress_state->hive(hive_name);
 
 	auto hive = std::move(hive_result).value();
+	auto root_offset = hive.root_key_offset();
+	if (!root_offset.ok()) return status_t::failure(root_offset.error().message, root_offset.error().code);
+
 	auto hive_object = database.insert_object("registry_hive", std::string(hive_name), std::string(hive_name));
 	if (!hive_object.ok()) return status_t::failure(hive_object.error().message, hive_object.error().code);
 
 	std::uint64_t unpublished_keys = 0U;
 	std::uint64_t unpublished_values = 0U;
-	std::deque<pending_key_t> pending;
-	pending.push_back(pending_key_t{ L"", hive_object.value(), 0U });
+	std::vector<pending_key_t> pending;
+	pending.reserve(4096U);
+	pending.push_back(pending_key_t{
+		root_offset.value(),
+		{},
+		std::string(hive_name),
+		hive_object.value(),
+		0U
+	});
+
 	while (!pending.empty())
 	{
-		auto current = std::move(pending.front());
-		pending.pop_front();
+		auto current = std::move(pending.back());
+		pending.pop_back();
 		if (current.depth > max_registry_key_depth)
 		{
 			return status_t::failure("Registry key hierarchy exceeds the supported depth", ERROR_BADDB);
 		}
 
-		auto current_utf8 = platform::utf8(current.path);
-		if (!current_utf8.ok()) return status_t::failure(current_utf8.error().message, current_utf8.error().code);
-
-		const std::string object_key = key_object_key(hive_name, current_utf8.value());
-		const std::string display_path = join_key(hive_name, current_utf8.value());
-
-		std::string display_name;
-		if (current.path.empty())
-		{
-			display_name = std::string(hive_name);
-		}
-		else
-		{
-			const std::size_t separator = current_utf8.value().find_last_of('\\');
-			display_name = current_utf8.value().substr(
-				separator == std::string::npos ? 0U : separator + 1U);
-		}
-		auto key_object = database.insert_object("registry_key", object_key, display_name, display_path, current.parent);
+		const std::string object_key = key_object_key(hive_name, current.path);
+		const std::string display_path = join_key(hive_name, current.path);
+		auto key_object = database.insert_object(
+			"registry_key",
+			object_key,
+			current.name,
+			display_path,
+			current.parent);
 		if (!key_object.ok()) return status_t::failure(key_object.error().message, key_object.error().code);
 
-		auto values_result = hive.values(current.path);
+		auto values_result = hive.values(current.offset);
 		if (!values_result.ok()) return status_t::failure(values_result.error().message, values_result.error().code);
 		++unpublished_keys;
 		unpublished_values += static_cast<std::uint64_t>(values_result.value().size());
@@ -214,23 +220,30 @@ status_t scan_hive(
 
 		for (const auto& value : values_result.value())
 		{
-			auto value_name = platform::utf8(value.name);
-			if (!value_name.ok()) return status_t::failure(value_name.error().message, value_name.error().code);
-			const std::string value_key = value_object_key(hive_name, current_utf8.value(), value_name.value());
+			auto value_name_result = platform::utf8(value.name);
+			if (!value_name_result.ok())
+			{
+				return status_t::failure(value_name_result.error().message, value_name_result.error().code);
+			}
+			const std::string& value_name = value_name_result.value();
+			const std::string value_key = value_object_key(hive_name, current.path, value_name);
 			std::string value_path;
-			value_path.reserve(display_path.size() + 2U + value_name.value().size());
+			value_path.reserve(display_path.size() + 2U + value_name.size());
 			value_path.append(display_path);
 			value_path.append("::");
-			value_path.append(value_name.value());
+			value_path.append(value_name);
 			auto value_object = database.insert_object(
 				"registry_value",
 				value_key,
-				value_name.value().empty() ? "(Default)" : value_name.value(),
+				value_name.empty() ? "(Default)" : value_name,
 				value_path,
 				key_object.value());
 			if (!value_object.ok()) return status_t::failure(value_object.error().message, value_object.error().code);
 
-			auto raw = database.registry_data(value_object.value(), value.type, std::span<const std::byte>(value.data.data(), value.data.size()));
+			auto raw = database.registry_data(
+				value_object.value(),
+				value.type,
+				std::span<const std::byte>(value.data.data(), value.data.size()));
 			if (!raw.ok()) return raw;
 			auto type = database.property(value_object.value(), "type", std::to_string(value.type));
 			if (!type.ok()) return type;
@@ -243,19 +256,35 @@ status_t scan_hive(
 			}
 		}
 
-		auto subkeys_result = hive.subkeys(current.path);
+		auto subkeys_result = hive.subkeys(current.offset);
 		if (!subkeys_result.ok()) return status_t::failure(subkeys_result.error().message, subkeys_result.error().code);
 		if (!subkeys_result.value().empty() && current.depth >= max_registry_key_depth)
 		{
 			return status_t::failure("Registry key hierarchy exceeds the supported depth", ERROR_BADDB);
 		}
 
-		for (const auto& subkey : subkeys_result.value())
+		// subkeys() is sorted ascending. Push in reverse so the LIFO stack
+		// retains the same deterministic ascending visit order.
+		for (auto iterator = subkeys_result.value().rbegin(); iterator != subkeys_result.value().rend(); ++iterator)
 		{
-			std::wstring child = current.path;
-			if (!child.empty()) child.push_back(L'\\');
-			child.append(subkey);
-			pending.push_back(pending_key_t{ std::move(child), key_object.value(), current.depth + 1U });
+			auto child_name_result = platform::utf8(iterator->name);
+			if (!child_name_result.ok())
+			{
+				return status_t::failure(child_name_result.error().message, child_name_result.error().code);
+			}
+			std::string child_name = std::move(child_name_result).value();
+			std::string child_path;
+			child_path.reserve(current.path.size() + (current.path.empty() ? 0U : 1U) + child_name.size());
+			child_path.append(current.path);
+			if (!child_path.empty()) child_path.push_back('\\');
+			child_path.append(child_name);
+			pending.push_back(pending_key_t{
+				iterator->offset,
+				std::move(child_path),
+				std::move(child_name),
+				key_object.value(),
+				current.depth + 1U
+			});
 		}
 	}
 
@@ -309,7 +338,9 @@ status_t scan_optional_hive_path(
 
 std::string key_object_key(std::string_view hive, std::string_view relative_path)
 {
-	std::string result("K");
+	std::string result;
+	result.reserve(1U + 24U + hive.size() + relative_path.size());
+	result.push_back('K');
 	append_identity_component(result, hive);
 	append_identity_component(result, relative_path);
 	return result;
@@ -317,7 +348,9 @@ std::string key_object_key(std::string_view hive, std::string_view relative_path
 
 std::string value_object_key(std::string_view hive, std::string_view relative_path, std::string_view value_name)
 {
-	std::string result("V");
+	std::string result;
+	result.reserve(1U + 36U + hive.size() + relative_path.size() + value_name.size());
+	result.push_back('V');
 	append_identity_component(result, hive);
 	append_identity_component(result, relative_path);
 	append_identity_component(result, value_name);
