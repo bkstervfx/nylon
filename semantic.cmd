@@ -10,7 +10,7 @@ set "CLASSIFIER=%ROOT%\bin\nylon-semantic-classify.exe"
 set "LINKER=%ROOT%\bin\nylon-semantic-link.exe"
 set "SEMANTIC_MARKER=%ROOT%\bin\nylon-semantic.request-v3"
 set "VIEWER=%ROOT%\bin\nylon-viewer.exe"
-set "VIEWER_MARKER=%ROOT%\bin\nylon-viewer.semantic-v1"
+set "VIEWER_MARKER=%ROOT%\bin\nylon-viewer.atlas-v1"
 
 if not exist "%SEMANTIC%" goto build_semantic
 if not exist "%CLASSIFIER%" goto build_semantic
@@ -29,7 +29,7 @@ if not exist "%VIEWER_MARKER%" goto build_viewer
 goto viewer_built
 
 :build_viewer
-echo Nylon Viewer is missing or predates semantic progress support. Rebuilding it now...
+echo Nylon Viewer is missing or predates the full Atlas interface. Rebuilding it now...
 call "%ROOT%\build-viewer.cmd"
 if errorlevel 1 exit /b 1
 
@@ -41,12 +41,11 @@ if errorlevel 1 exit /b 1
 "%CLASSIFIER%" "%DB%"
 if errorlevel 1 exit /b 1
 
-rem Run the cheap planner pass once more so newly preclassified units are
-rem actually committed before the browser opens or a large model download begins.
+rem Commit every free deterministic lift before opening the Atlas.
 "%SEMANTIC%" "%DB%" --plan-only
 if errorlevel 1 exit /b 1
 
-rem The progress field now opens with every deterministic unit already green.
+rem Atlas opens immediately and represents the complete work map while lifting continues.
 start "Nylon Viewer" "%VIEWER%" "%DB%"
 
 if "%LOCALAPPDATA%"=="" (
