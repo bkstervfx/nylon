@@ -142,3 +142,42 @@ jobs:
           findstr /C:"NOT NULL constraint failed" smoke-output.txt >nul
           if not errorlevel 1 (type smoke-output.txt & exit /b 1)
           exit /b 0
+
+      - name: Smoke-test optimized registry traversal
+        shell: pwsh
+        run: |
+          $key = 'HKCU\Software\NylonCiSmoke'
+          try {
+            & reg.exe add "$key\Child" /v Greeting /t REG_SZ /d hello /f | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to create registry smoke key' }
+            & reg.exe add "$key\Child" /v Number /t REG_DWORD /d 42 /f | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to create registry smoke value' }
+
+            $hive = Join-Path $PWD.Path 'valid-smoke.hiv'
+            & reg.exe save $key $hive /y | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to save registry smoke hive' }
+
+            $root = Join-Path $PWD.Path 'valid-smoke'
+            $config = Join-Path $root 'Windows\System32\config'
+            [System.IO.Directory]::CreateDirectory($config) | Out-Null
+            [System.IO.File]::WriteAllBytes((Join-Path $root 'Windows\System32\ntoskrnl.exe'), [byte[]]@(0))
+            foreach ($name in @('SOFTWARE', 'SYSTEM', 'COMPONENTS', 'DEFAULT', 'SAM', 'SECURITY')) {
+              Copy-Item -LiteralPath $hive -Destination (Join-Path $config $name)
+            }
+
+            $stdout = Join-Path $PWD.Path 'valid-smoke-stdout.txt'
+            $stderr = Join-Path $PWD.Path 'valid-smoke-stderr.txt'
+            $process = Start-Process -FilePath (Join-Path $PWD.Path 'bin\nylon.exe') `
+              -ArgumentList @('scan', $root) `
+              -RedirectStandardOutput $stdout `
+              -RedirectStandardError $stderr `
+              -Wait -PassThru
+            $output = (Get-Content $stdout -Raw) + "`n" + (Get-Content $stderr -Raw)
+            if ($process.ExitCode -ne 0 -or -not $output.Contains('complete')) {
+              Write-Host $output
+              throw "Optimized registry traversal smoke failed with exit code $($process.ExitCode)"
+            }
+          }
+          finally {
+            & reg.exe delete $key /f 2>$null | Out-Null
+          }
