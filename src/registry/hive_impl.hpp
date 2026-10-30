@@ -1,8 +1,8 @@
 #ifndef NYLON_REGISTRY_HIVE_IMPL_HPP
 #define NYLON_REGISTRY_HIVE_IMPL_HPP
 
+#include <algorithm>
 #include <map>
-#include <set>
 #include <span>
 #include <vector>
 
@@ -38,7 +38,7 @@ struct hive_t::impl_t
 	std::uint32_t data_size = 0;
 	std::size_t cell_count = 0;
 	std::vector<hbin_range_t> hbins;
-	std::set<std::uint32_t> cell_offsets;
+	std::vector<std::uint32_t> cell_offsets;
 	mutable std::map<std::wstring, std::uint32_t, ordinal_less_t> key_cache;
 
 	[[nodiscard]] std::span<const std::byte> bytes() const noexcept
@@ -57,20 +57,29 @@ struct hive_t::impl_t
 				"Registry cell offset is invalid",
 				ERROR_BADDB);
 		}
-		if (!cell_offsets.contains(offset))
+		if (!std::binary_search(cell_offsets.begin(), cell_offsets.end(), offset))
 		{
 			return result_t<std::span<const std::byte>>::failure(
 				"Registry reference does not point to a cell boundary",
 				ERROR_BADDB);
 		}
 
-		const hbin_range_t* owner = nullptr;
-		for (const auto& range : hbins)
-		{
-			if (offset >= range.cell_begin && offset < range.end)
+		const auto upper = std::upper_bound(
+			hbins.begin(),
+			hbins.end(),
+			offset,
+			[](std::uint32_t value, const hbin_range_t& range)
 			{
-				owner = &range;
-				break;
+				return value < range.cell_begin;
+			});
+
+		const hbin_range_t* owner = nullptr;
+		if (upper != hbins.begin())
+		{
+			const auto candidate = std::prev(upper);
+			if (offset >= candidate->cell_begin && offset < candidate->end)
+			{
+				owner = &*candidate;
 			}
 		}
 
@@ -352,14 +361,15 @@ struct hive_t::impl_t
 				ERROR_BADDB);
 		}
 
-		std::set<std::uint32_t> unique_offsets;
-		for (const std::uint32_t child_offset : offsets.value())
+		auto& child_offsets = offsets.value();
+		std::sort(child_offsets.begin(), child_offsets.end());
+		if (std::adjacent_find(child_offsets.begin(), child_offsets.end()) != child_offsets.end())
 		{
-			if (!unique_offsets.insert(child_offset).second)
-			{
-				return result_t<std::vector<std::uint32_t>>::failure("Registry subkey index contains duplicate cells", ERROR_BADDB);
-			}
+			return result_t<std::vector<std::uint32_t>>::failure("Registry subkey index contains duplicate cells", ERROR_BADDB);
+		}
 
+		for (const std::uint32_t child_offset : child_offsets)
+		{
 			auto child_result = cell(child_offset);
 			if (!child_result.ok())
 			{
@@ -517,7 +527,6 @@ struct hive_t::impl_t
 
 		std::vector<std::uint32_t> result;
 		result.reserve(value_count);
-		std::set<std::uint32_t> unique_offsets;
 
 		for (std::size_t index = 0; index < value_count; ++index)
 		{
@@ -527,12 +536,13 @@ struct hive_t::impl_t
 			{
 				return result_t<std::vector<std::uint32_t>>::failure(offset.error().message, offset.error().code);
 			}
-			if (!unique_offsets.insert(offset.value()).second)
-			{
-				return result_t<std::vector<std::uint32_t>>::failure("Registry value list contains duplicate cells", ERROR_BADDB);
-			}
-
 			result.push_back(offset.value());
+		}
+
+		std::sort(result.begin(), result.end());
+		if (std::adjacent_find(result.begin(), result.end()) != result.end())
+		{
+			return result_t<std::vector<std::uint32_t>>::failure("Registry value list contains duplicate cells", ERROR_BADDB);
 		}
 
 		return result_t<std::vector<std::uint32_t>>::success(std::move(result));
