@@ -63,8 +63,8 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [4/4] Building semantic hierarchy linker...
-"%CXX%" --target=x86_64-w64-mingw32 -std=c++20 -O2 -DNDEBUG -DUNICODE -D_UNICODE -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_WIN32_WINNT=0x0A00 -Wall -Wextra -Wpedantic -Werror -Wno-unused-function -fstack-protector-strong -ffunction-sections -fdata-sections -mguard=cf -fuse-ld=lld -municode -static -Wl,--gc-sections -Wl,--dynamicbase -Wl,--nxcompat -Wl,--high-entropy-va -I"%SQLITE_DIR%" -include "%ROOT%\semantic\compiler_compat.hpp" "%ROOT%\semantic\postprocess.cpp" "%SQLITE_OBJ%" -o "%BIN%\nylon-semantic-link.exe"
+echo [4/4] Building linear-time semantic hierarchy linker...
+"%CXX%" --target=x86_64-w64-mingw32 -std=c++20 -O2 -DNDEBUG -DUNICODE -D_UNICODE -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_WIN32_WINNT=0x0A00 -Wall -Wextra -Wpedantic -Werror -Wno-unused-function -fstack-protector-strong -ffunction-sections -fdata-sections -mguard=cf -fuse-ld=lld -municode -static -Wl,--gc-sections -Wl,--dynamicbase -Wl,--nxcompat -Wl,--high-entropy-va -I"%SQLITE_DIR%" -include "%ROOT%\semantic\compiler_compat.hpp" "%ROOT%\semantic\postprocess_v2.cpp" "%SQLITE_OBJ%" -o "%BIN%\nylon-semantic-link.exe"
 if errorlevel 1 (
     echo error: Semantic hierarchy linker build failed.
     exit /b 1
