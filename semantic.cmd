@@ -8,7 +8,7 @@ if "%DB%"=="" set "DB=%ROOT%\output\image.db"
 set "SEMANTIC=%ROOT%\bin\nylon-semantic.exe"
 set "CLASSIFIER=%ROOT%\bin\nylon-semantic-classify.exe"
 set "LINKER=%ROOT%\bin\nylon-semantic-link.exe"
-set "SEMANTIC_MARKER=%ROOT%\bin\nylon-semantic.request-v2"
+set "SEMANTIC_MARKER=%ROOT%\bin\nylon-semantic.request-v3"
 set "VIEWER=%ROOT%\bin\nylon-viewer.exe"
 set "VIEWER_MARKER=%ROOT%\bin\nylon-viewer.semantic-v1"
 
@@ -19,7 +19,7 @@ if not exist "%SEMANTIC_MARKER%" goto build_semantic
 goto semantic_built
 
 :build_semantic
-echo Nylon Semantic Lifter is missing or predates request contract v2. Building it now...
+echo Nylon Semantic Lifter is missing or predates request contract v3. Building it now...
 call "%ROOT%\build-semantic.cmd"
 if errorlevel 1 exit /b 1
 
