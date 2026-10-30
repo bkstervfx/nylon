@@ -34,9 +34,12 @@ if errorlevel 1 exit /b 1
 "%CLASSIFIER%" "%DB%"
 if errorlevel 1 exit /b 1
 
-rem Open the progress field immediately. The full semantic pass below will first
-rem commit the newly preclassified units, then dispatch only the remaining work
-rem to the local GPU model.
+rem Run the cheap planner pass once more so newly preclassified units are
+rem actually committed before the browser opens or a large model download begins.
+"%SEMANTIC%" "%DB%" --plan-only
+if errorlevel 1 exit /b 1
+
+rem The progress field now opens with every deterministic unit already green.
 start "Nylon Viewer" "%VIEWER%" "%DB%"
 
 if "%LOCALAPPDATA%"=="" (
