@@ -85,6 +85,16 @@ The source `image.db` is never modified. `image.map.db` is a derived, reproducib
 
 The current semantic pipeline is registry-focused. Its source-accounting invariant covers imported registry keys/values; that must not be described as full Windows-image semantic coverage.
 
+The active semantic tools bind maps to streaming SHA-256 of the finalized raw database,
+not its path/size/timestamp. They hold a stable raw-file read lock, refuse nonempty raw
+WAL/journal sidecars, and the standalone classifier/linker reject mismatched maps before
+updates. Byte-identical relocated audits retain their binding. Changed raw contents
+invalidate the runtime's derived map; raw evidence is never rewritten. Schema v4 audit
+IDs are also recorded in map metadata. Legacy audits containing sensitive/unreviewed
+hives are refused; re-scan them with the current omission policy. This is not universal
+secret detection or a safe-export guarantee. The transitional browser viewer still lacks
+this identity gate and must not be used as proof of compatible whole-image coverage.
+
 In the current viewer, choose **Progress** to see the mapping pass as a dense work field. Each square is a semantic work unit:
 
 ```text

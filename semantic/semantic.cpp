@@ -3,6 +3,7 @@
 #include <winhttp.h>
 
 #include <sqlite3.h>
+#include "source_binding.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -299,22 +300,9 @@ std::filesystem::path map_path_for(const std::filesystem::path& source)
     return result;
 }
 
-std::string source_fingerprint(sqlite3* source, const std::filesystem::path& path)
+std::string source_fingerprint(sqlite3*, const std::filesystem::path& path)
 {
-    std::error_code error;
-    const auto size = std::filesystem::file_size(path, error);
-    if (error) throw std::runtime_error("Unable to read source database size");
-    const auto modified = std::filesystem::last_write_time(path, error);
-    if (error) throw std::runtime_error("Unable to read source database timestamp");
-    const std::string schema = scalar_text(source, "SELECT value FROM metadata WHERE meta_key='schema_version';").value_or("");
-    const std::string iso = scalar_text(source, "SELECT value FROM metadata WHERE meta_key='source_iso_sha256';").value_or("");
-    const std::string index = scalar_text(source, "SELECT value FROM metadata WHERE meta_key='source_image_index';").value_or("");
-    std::ostringstream material;
-    material << path_utf8(std::filesystem::absolute(path)) << '\n'
-             << size << '\n'
-             << modified.time_since_epoch().count() << '\n'
-             << schema << '\n' << iso << '\n' << index;
-    return sha256_hex(material.str());
+    return nylon::semantic_binding::fingerprint(path);
 }
 
 bool map_compatible(const std::filesystem::path& path, std::string_view fingerprint)
@@ -345,7 +333,7 @@ void remove_map_files(const std::filesystem::path& path)
     std::filesystem::remove(path.wstring() + L"-shm", ignored);
 }
 
-void initialize_map(sqlite3* database, std::string_view fingerprint, const std::filesystem::path& source_path)
+void initialize_map(sqlite3* database, std::string_view fingerprint, const std::filesystem::path& source_path, std::string_view audit_id = {})
 {
     exec(database, R"SQL(
 PRAGMA journal_mode=WAL;
@@ -413,6 +401,8 @@ CREATE TABLE IF NOT EXISTS unresolved(
     const std::vector<std::pair<std::string, std::string>> values = {
         {"format_version", "1"},
         {"source_fingerprint", std::string(fingerprint)},
+        {"source_binding_format", "raw-db-sha256-v1"},
+        {"source_audit_id", std::string(audit_id)},
         {"source_path", path_utf8(std::filesystem::absolute(source_path))},
         {"model_name", std::string(model_name)},
         {"model_sha256", std::string(model_sha256)},

@@ -375,16 +375,19 @@ int wmain(int argc, wchar_t** argv)
         if (!std::filesystem::is_regular_file(source_path, error) || error)
             throw std::runtime_error("Nylon source database was not found");
 
+        auto source_lock = nylon::semantic_binding::lock_source(source_path);
         auto source = database_t::open_readonly(source_path);
+        nylon::semantic_binding::require_registry_policy(source.get());
         exec(source.get(), "PRAGMA query_only=ON; PRAGMA temp_store=MEMORY;");
         const auto schema = scalar_text(source.get(), "SELECT value FROM metadata WHERE meta_key='schema_version';");
-        if (!schema.has_value() || *schema != "2") throw std::runtime_error("Semantic lifter requires Nylon schema version 2");
+        if (!schema.has_value() || (*schema != "2" && *schema != "3" && *schema != "4"))
+            throw std::runtime_error("Semantic lifter requires compatible Nylon registry schema 2, 3 or 4");
 
         const std::string fingerprint = source_fingerprint(source.get(), source_path);
         const std::filesystem::path map_path = map_path_for(source_path);
         if (!request_contract_compatible_v3(map_path, fingerprint)) remove_map_files(map_path);
         auto map = database_t::open_map(map_path);
-        initialize_map(map.get(), fingerprint, source_path);
+        initialize_map(map.get(), fingerprint, source_path, scalar_text(source.get(), "SELECT value FROM metadata WHERE meta_key='audit_id';").value_or(""));
         write_request_contract_v3(map.get());
 
         std::cout << "Nylon Semantic Lifter\n"

@@ -39,6 +39,12 @@ jobs:
             if (-not (Test-Path $exe)) { throw "$exe was not produced" }
           }
 
+      - name: Verify cryptographic source binding and semantic regression
+        shell: pwsh
+        run: |
+          python tests/source_binding.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Planner, preclassification, resume, HTTP, validation and hierarchy smoke test
         shell: pwsh
         run: |

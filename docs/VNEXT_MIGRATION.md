@@ -123,3 +123,38 @@ Conservative omission is not universal secret detection. Safe external export re
 unimplemented. Existing semantic source accounting covers only imported registry rows,
 not whole-image evidence or deliberate omissions. Path/size/time map binding remains
 until the next milestone. Real-model and native-viewer validation remain outstanding.
+
+## Current milestone M3: exact derived binding (prerequisite M2 at 3709c2d)
+
+- Purpose: prevent resumable semantic output from attaching to a different raw audit.
+- Scope: reuse streaming SHA-256/platform read locks; fingerprint immutable finalized raw
+  DB bytes; check binding before classifier/linker mutations; accept compatible registry
+  tables in schema v4 while retaining synthetic schema-v2 regression. Version build marker.
+- Non-scope: whole-image semantic planner, model/ontology changes, export, native viewer.
+- Invariant: raw changes invalidate the map even with unchanged path/size/timestamp;
+  byte-identical relocated raw input remains compatible; unfinalized WAL/journal input
+  is refused; source is held read-only against concurrent replacement/writes; auxiliary
+  writers refuse a mismatched map before any map update. Semantic coverage still means
+  imported registry-source accounting only, never omitted values or whole-image coverage.
+- Compatibility: fingerprint version changes invalidate derived maps, not raw evidence.
+  Runtime keeps its existing derived rebuild policy; standalone auxiliary tools refuse
+  incompatible maps. No third-party pin/model/request-contract change.
+- Validation required: build all active semantic targets; existing synthetic planner,
+  preclassifier, resume, fake-local-HTTP and hierarchy invariants; same-size/time mutation,
+  relocation, dirty-sidecar and mismatched-writer refusal fixtures; v4 raw planning smoke.
+- Verification (2026-10-30): build-semantic.cmd built all three actual active targets;
+  tests/source_binding.py passed synthetic planning/preclassification/resume/local fake
+  HTTP/grounded-request-shape/hierarchy and exact imported source-reference accounting;
+  equal-size/equal-time raw mutation invalidates maps, identical relocated raw input
+  remains compatible, auxiliary mismatch and nonempty WAL input are refused before map
+  writes, v4 audit IDs are recorded, sensitive/unreviewed hive input is refused.
+  test-foundation.cmd also passed after this integration; no remote CI success claimed.
+- Fresh real v4 raw planning: 12,623 jobs, 932,567 imported registry sources. Separate
+  preclassifier added 3,382 deterministic units; deterministic-only resume reused the
+  persisted plan and committed 4,459 jobs / 340,717 imported sources. No real model calls.
+  Independently recomputed streaming raw SHA-256 and audit ID matched map metadata;
+  map integrity_check passed. This does not prove whole-image semantic accounting,
+  omitted-value interpretation, real-model quality or complete semantic resolution.
+- Checkpoint: the commit containing this update. Next: source/media catalog and original
+  metadata availability, then inventory-fed deterministic domain collectors. Browser
+  identity/reachability/native parity and safe export remain explicitly outstanding.
