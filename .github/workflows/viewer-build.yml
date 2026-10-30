@@ -1,0 +1,43 @@
+name: viewer-build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "viewer/**"
+      - "build-viewer.cmd"
+      - "view.cmd"
+      - ".github/workflows/viewer-build.yml"
+  pull_request:
+    paths:
+      - "viewer/**"
+      - "build-viewer.cmd"
+      - "view.cmd"
+      - ".github/workflows/viewer-build.yml"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Nylon portable toolchain
+        shell: cmd
+        run: build.cmd
+
+      - name: Build lightweight viewer
+        shell: cmd
+        run: build-viewer.cmd
+
+      - name: Verify viewer executable
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "bin\nylon-viewer.exe")) {
+            throw "bin\nylon-viewer.exe was not produced"
+          }
+          $size = (Get-Item "bin\nylon-viewer.exe").Length
+          if ($size -lt 100000) {
+            throw "nylon-viewer.exe is unexpectedly small: $size bytes"
+          }
+          Write-Host "nylon-viewer.exe size: $size bytes"
