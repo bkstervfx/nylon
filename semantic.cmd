@@ -6,12 +6,23 @@ set "ROOT=%CD%"
 set "DB=%~1"
 if "%DB%"=="" set "DB=%ROOT%\output\image.db"
 set "SEMANTIC=%ROOT%\bin\nylon-semantic.exe"
+set "VIEWER=%ROOT%\bin\nylon-viewer.exe"
 
 if not exist "%SEMANTIC%" (
     echo Nylon Semantic Lifter is not built yet. Building it now...
     call "%ROOT%\build-semantic.cmd"
     if errorlevel 1 exit /b 1
 )
+if not exist "%VIEWER%" (
+    echo Nylon Viewer is not built yet. Building it now...
+    call "%ROOT%\build-viewer.cmd"
+    if errorlevel 1 exit /b 1
+)
+
+rem Build the exact work map first so the browser can visualize real progress immediately.
+"%SEMANTIC%" "%DB%" --plan-only
+if errorlevel 1 exit /b 1
+start "Nylon Viewer" "%VIEWER%" "%DB%"
 
 if "%LOCALAPPDATA%"=="" (
     echo error: LOCALAPPDATA is not available.
