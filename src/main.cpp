@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "database/database.hpp"
+#include "database/staging.hpp"
 #include "image/image.hpp"
 #include "media/media.hpp"
 #include "platform/win32.hpp"
@@ -197,7 +198,7 @@ nylon::status_t create_runtime_directories(
 	return nylon::status_t::success();
 }
 
-nylon::status_t replace_database(const std::filesystem::path& path)
+nylon::status_t remove_database_artifacts(const std::filesystem::path& path)
 {
 	for (const auto& candidate : {
 		path,
@@ -209,9 +210,37 @@ nylon::status_t replace_database(const std::filesystem::path& path)
 		if (error)
 		{
 			return nylon::status_t::failure(
-				"Unable to replace the previous audit database",
+				"Unable to remove stale audit database staging files",
 				static_cast<std::uint32_t>(error.value()));
 		}
+	}
+	return nylon::status_t::success();
+}
+
+nylon::status_t publish_database(
+	const std::filesystem::path& staging,
+	const std::filesystem::path& destination)
+{
+	for (const auto& sidecar : {
+		std::filesystem::path(destination.native() + L"-wal"),
+		std::filesystem::path(destination.native() + L"-shm") })
+	{
+		std::error_code error;
+		std::filesystem::remove(sidecar, error);
+		if (error)
+		{
+			return nylon::status_t::failure(
+				"Unable to remove stale audit database sidecar",
+				static_cast<std::uint32_t>(error.value()));
+		}
+	}
+
+	if (!MoveFileExW(
+		staging.c_str(),
+		destination.c_str(),
+		MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+	{
+		return nylon::status_t::failure("Unable to publish audit database", GetLastError());
 	}
 	return nylon::status_t::success();
 }
@@ -249,6 +278,7 @@ int wmain(int argc, wchar_t** argv)
 	const auto temp_root = runtime_root / L"temp";
 	const auto cache_root = runtime_root / L"cache";
 	const auto database_path = output_root / L"image.db";
+	const auto staging_database_path = output_root / L"image.db.staging";
 
 	auto status = create_runtime_directories(output_root, temp_root, cache_root);
 	if (!status.ok())
@@ -312,14 +342,14 @@ int wmain(int argc, wchar_t** argv)
 	}
 	auto image = std::move(image_result).value();
 
-	status = replace_database(database_path);
+	status = remove_database_artifacts(staging_database_path);
 	if (!status.ok())
 	{
 		print_error(status.error());
 		return 1;
 	}
 
-	auto database_result = nylon::database::database_t::open(database_path);
+	auto database_result = nylon::database::database_t::open(staging_database_path);
 	if (!database_result.ok())
 	{
 		print_error(database_result.error());
@@ -327,7 +357,21 @@ int wmain(int argc, wchar_t** argv)
 	}
 	auto database = std::move(database_result).value();
 
+	status = nylon::database::prepare_staging_database(database);
+	if (!status.ok())
+	{
+		print_error(status.error());
+		return 1;
+	}
+
 	status = database.initialize();
+	if (!status.ok())
+	{
+		print_error(status.error());
+		return 1;
+	}
+
+	status = nylon::database::activate_staging_database(database);
 	if (!status.ok())
 	{
 		print_error(status.error());
@@ -342,7 +386,7 @@ int wmain(int argc, wchar_t** argv)
 	}
 
 	for (const auto& [key, value] : {
-		std::pair<std::string_view, std::string_view>{ "schema_version", "1" },
+		std::pair<std::string_view, std::string_view>{ "schema_version", "2" },
 		{ "mode", "read_only_static_audit" } })
 	{
 		status = database.meta(key, value);
@@ -438,6 +482,21 @@ int wmain(int argc, wchar_t** argv)
 	}
 
 	status = database.finalize_graph();
+	if (!status.ok())
+	{
+		print_error(status.error());
+		return 1;
+	}
+
+	status = nylon::database::quick_check(database);
+	if (!status.ok())
+	{
+		print_error(status.error());
+		return 1;
+	}
+
+	database.close();
+	status = publish_database(staging_database_path, database_path);
 	if (!status.ok())
 	{
 		print_error(status.error());
