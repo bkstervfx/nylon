@@ -39,6 +39,47 @@ If the ISO contains multiple Windows images, Nylon lists the available indexes i
 bin\nylon.exe scan D:\path\to\Windows.iso --index 6
 ```
 
+## Semantic map
+
+After a scan, Nylon can build a derived human-readable semantic map from the immutable audit database using a pinned local model:
+
+```cmd
+semantic.cmd
+```
+
+Or target another audit database:
+
+```cmd
+semantic.cmd D:\audits\image.db
+```
+
+The first run creates/resumes `image.map.db`, opens the local browser viewer immediately, and then installs the pinned local inference runtime/model only when they are not already cached. The model and runtime live under `%LOCALAPPDATA%\Temp\nylon\tools\semantic\` and are reused on later runs.
+
+The source `image.db` is never modified. `image.map.db` is a derived, reproducible semantic representation and records exact source references back to the audit evidence. Work is partitioned into bounded units, validated before commit, and resumable. Known Windows structures are normalized deterministically where possible; the local model is used for bounded semantic lifting rather than whole-image chat or threat scoring.
+
+In the viewer, choose **Semantic** to see the mapping pass as a dense work field. Each square is a real semantic work unit:
+
+```text
+gray   pending
+blue   currently processing
+green  validated and committed
+red    failed
+```
+
+Hovering a square shows the exact registry branch and source-object count. Clicking it opens the committed semantic output or the actual failure details. The percentage is calculated from raw registry keys/values owned by completed work units, so it represents source coverage rather than an estimated animation.
+
+The initial local configuration is pinned to Qwen3.5-4B Q8_0 through llama.cpp Vulkan with four parallel inference slots. `semantic/model.manifest` records the model/runtime identities and semantic schema versions.
+
+## Viewer
+
+Open the raw audit viewer without running the semantic pass with:
+
+```cmd
+view.cmd
+```
+
+The viewer and semantic progress UI are served only on `127.0.0.1`. The audit database is opened read-only.
+
 ## ISO handling and persistent cache
 
 Nylon does not mount the ISO and does not use DISM or WIMGAPI mounting. It extracts the ISO as an archive with the local verified 7-Zip runtime, then applies the selected WIM/ESD/SWM image with wimlib using:
