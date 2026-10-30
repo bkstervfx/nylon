@@ -1,6 +1,8 @@
 #include "staging.hpp"
 
 #include <string>
+#include <string_view>
+#include <utility>
 
 #include <sqlite3.h>
 
