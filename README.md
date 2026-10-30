@@ -4,7 +4,20 @@ Nylon is a read-only C++20 auditor for offline Windows images.
 
 > **Current behavior vs product target:** this README primarily documents commands and behavior that exist today. The canonical long-term product goal and architecture are defined in `docs/PRODUCT_GOAL.md` and `docs/ARCHITECTURE.md`; agent guardrails are in `AGENTS.md`. Do not infer that target collectors/native Atlas are already implemented from those documents, and do not infer that the current registry/browser vertical slice is the final product architecture.
 
-Current implementation covers the project foundation, direct binary registry-hive auditing and portable Windows ISO preparation.
+Current implementation covers the project foundation, a selected-image working-namespace
+inventory, direct binary registry-hive auditing and portable Windows ISO preparation.
+This is not yet exhaustive whole-image domain collection.
+
+The raw schema v3 foundation records `audit_identity`, `collector_runs`, `fs_entries`,
+`evidence_gaps` and `source_metadata_availability`. Filesystem discovery/representation
+are separate from parsing and from all other required collector families, which remain
+pending until migrated. Paths preserve exact UTF-16 identity plus readable/comparison
+forms where conversion succeeds. Reparse entries are recorded without following targets.
+Working-view metadata is not original source metadata; uncollected original fields are
+explicitly `NOT_EXPOSED`. Expanded-tree source identity is explicitly weaker/run-scoped,
+not a content hash. Existing audits require a fresh staged scan, not an in-place upgrade.
+
+After `build.cmd`, `test-foundation.cmd` runs deterministic namespace and registry fixtures.
 
 ## Build
 

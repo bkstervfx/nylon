@@ -33,6 +33,10 @@ jobs:
         shell: cmd
         run: if not exist bin\nylon.exe exit /b 1
 
+      - name: Verify raw namespace foundation
+        shell: cmd
+        run: test-foundation.cmd
+
       - name: Smoke-test ISO hashing path
         shell: cmd
         run: |

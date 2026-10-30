@@ -12,6 +12,7 @@
 
 #include "database/database.hpp"
 #include "database/staging.hpp"
+#include "evidence/evidence.hpp"
 #include "image/image.hpp"
 #include "media/media.hpp"
 #include "platform/win32.hpp"
@@ -438,6 +439,20 @@ int wmain(int argc, wchar_t** argv)
 		}
 	}
 
+	status = nylon::evidence::initialize(database, prepared);
+	if (!status.ok())
+	{
+		print_error(status.error());
+		return 1;
+	}
+	std::cout << "filesystem namespace...\n";
+	status = nylon::evidence::inventory(database, image.root());
+	if (!status.ok())
+	{
+		print_error(status.error());
+		return 1;
+	}
+
 	status = database.collector_status("registry", "running");
 	if (!status.ok())
 	{
@@ -488,6 +503,12 @@ int wmain(int argc, wchar_t** argv)
 		return 1;
 	}
 
+	status = nylon::evidence::finalize(database);
+	if (!status.ok())
+	{
+		print_error(status.error());
+		return 1;
+	}
 	status = nylon::database::quick_check(database);
 	if (!status.ok())
 	{
@@ -503,7 +524,7 @@ int wmain(int argc, wchar_t** argv)
 		return 1;
 	}
 
-	std::cout << "complete\n";
+	std::cout << "current collector pass complete; whole-image collector migration pending\n";
 	auto database_display = nylon::platform::utf8(database_path.native());
 	std::cout << "database: "
 		<< (database_display.ok() ? database_display.value() : std::string("<path encoding error>"))
