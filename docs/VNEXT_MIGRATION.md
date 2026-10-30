@@ -384,10 +384,12 @@ native-viewer validation remain outstanding.
 
 ## Context checkpoint / exact resume
 
-- This checkpoint contains verified M8 implementation; `git rev-parse HEAD` identifies
-  its final commit. Previous implementation checkpoint: 8f0a61067214c7ca338398b86fa2f96bb5097d18.
+- Current verified implementation HEAD: f7d6110eacdd18ef0cd0c903adc751757179e970.
+  This subsequent documentation-only context checkpoint records that implementation;
+  `git rev-parse HEAD` identifies the final continuity-note commit. No unfinished atomic
+  code change or known failing verification remains at this context boundary.
 - Completed local scoped milestones: M1 49b5f87, M2 3709c2d, M3 bf8b56a, M4 1096fe0,
-  M5 82ec18c, M6 586235b, M7 8f0a610, M8 in this checkpoint. Phase A is already complete;
+  M5 82ec18c, M6 586235b, M7 8f0a610, M8 f7d6110. Phase A is already complete;
   do not restart it. Product migration is NOT complete; no architectural blocker known.
 - Next milestone M9 is NOT implemented or formally defined: service-definition inventory,
   typed configuration and evidence-backed references using all discovered control sets,
