@@ -121,8 +121,9 @@ No raw resume yet. Original ADS/EA/security/reparse fidelity/catalog missing. Na
 success alone cannot prove whole-image domain/semantic completion.
 Conservative omission is not universal secret detection. Safe external export remains
 unimplemented. Existing semantic source accounting covers only imported registry rows,
-not whole-image evidence or deliberate omissions. Path/size/time map binding remains
-until the next milestone. Real-model and native-viewer validation remain outstanding.
+not whole-image evidence or deliberate omissions. M3 replaced writer path/size/time
+binding; the transitional browser still lacks that identity gate. Real-model and
+native-viewer validation remain outstanding.
 
 ## M3: exact derived binding (checkpoint bf8b56a; prerequisite M2 at 3709c2d)
 
@@ -196,3 +197,36 @@ until the next milestone. Real-model and native-viewer validation remain outstan
   none are committed. Source images, original media and protected main were not modified.
 - Next dependency: source/media catalog retention and authoritative metadata availability,
   then indexed deterministic domain collectors. This is not migration completion.
+
+## Context checkpoint / exact resume
+
+- Current verified implementation HEAD: `1096fe005c5de10d6973e40043dd03ba230f63b8`.
+  This note is a subsequent documentation-only checkpoint; `git rev-parse HEAD` identifies
+  the final checkpoint commit. Branch/worktree remain the original isolated ones above.
+- Completed local milestones: M1 `49b5f87`, M2 `3709c2d`, M3 `bf8b56a`, M4 `1096fe0`.
+  Migration is NOT complete. No genuine technical blocker is known. This is a context
+  checkpoint, not a user-approval gate. No push, PR, merge, new branch or main edit occurred.
+- Latest checks: supported scanner/semantic builds passed; foundation and semantic-binding
+  fixtures passed; strict verify-only and SQLite integrity/FKs passed on the ISO-backed
+  audit. Remote CI and complete real-model/hardware/native-viewer paths were not exercised.
+- Exact next action: retain/catalog source metadata through the media preparation boundary,
+  without reapplying unchanged image payloads or editing existing immutable caches. First
+  inspect `src/media/media.hpp`, `media.cpp::parse_catalog`, `write_manifest`, `cached_result`
+  and `prepare`, plus `src/media/cache.cpp`. The current bounded catalog parser extracts
+  only indexes/names; the XML/catalog is discarded with preparation staging. Warm cache
+  results have no full image catalog. Do not promote that parser into complete metadata
+  interpretation or infer catalog facts from filenames. Record a scoped M5 definition,
+  compatibility/invalidation strategy and fixture invariant before implementation.
+- Real validation resource is available at `%USERPROFILE%/Downloads/windows.iso`; its
+  observed hash/index are recorded under M4. Keep it read-only. Existing cache is at
+  `%LOCALAPPDATA%/Temp/nylon/cache/images/<recorded-sha>/index-2/image`. Do not mutate it.
+- Useful commands (from this worktree): `cmd /d /c .\build.cmd`,
+  `cmd /d /c .\build-semantic.cmd`, `cmd /d /c .\test-foundation.cmd`,
+  `python tests/source_binding.py`, and
+  `.\bin\nylon-foundation-test.exe --verify .\build\real-m4-iso\output\image.db`.
+- Current authoritative generated run for inspection: `build/real-m4-iso/output/image.db`;
+  logs `build/real-m4-iso/scan.log`. M3's separate registry-only planning output is under
+  `build/real-m2/output`; never attach that map to the newer ISO-backed audit.
+- Unfinished: M5 source metadata/catalog implementation and 15 pending collector families;
+  original metadata fidelity, raw resume, whole-evidence semantics, browser retirement/
+  native Atlas, safe export and modification/re-scan/retained-function verification.
