@@ -6,11 +6,13 @@
 #include <filesystem>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace
 {
@@ -146,14 +148,39 @@ void insert_edge(sqlite3* map, std::int64_t source, std::string_view relation, s
     if (sqlite3_step(insert.get()) != SQLITE_DONE) throw std::runtime_error(sqlite3_errmsg(map));
 }
 
+void insert_source(sqlite3* map, std::int64_t semantic_id, std::string_view source_ref)
+{
+    statement_t insert(map, "INSERT OR IGNORE INTO semantic_sources(semantic_id,source_ref) VALUES(?1,?2);");
+    sqlite3_bind_int64(insert.get(), 1, semantic_id);
+    sqlite3_bind_text(insert.get(), 2, source_ref.data(), static_cast<int>(source_ref.size()), SQLITE_TRANSIENT);
+    if (sqlite3_step(insert.get()) != SQLITE_DONE) throw std::runtime_error(sqlite3_errmsg(map));
+}
+
+std::vector<std::int64_t> parse_roots(std::string_view roots)
+{
+    std::vector<std::int64_t> result;
+    std::size_t cursor = 0;
+    while (cursor < roots.size())
+    {
+        const std::size_t comma = roots.find(',', cursor);
+        const std::string_view part = roots.substr(cursor, comma == std::string_view::npos ? roots.size() - cursor : comma - cursor);
+        std::int64_t id = 0;
+        const auto parsed = std::from_chars(part.data(), part.data() + part.size(), id);
+        if (parsed.ec != std::errc{} || parsed.ptr != part.data() + part.size() || id <= 0)
+            throw std::runtime_error("Invalid semantic job root list");
+        result.push_back(id);
+        if (comma == std::string_view::npos) break;
+        cursor = comma + 1U;
+    }
+    if (result.empty()) throw std::runtime_error("Semantic job has no roots");
+    return result;
+}
+
 std::optional<std::int64_t> first_root_id(std::string_view roots)
 {
-    const std::size_t comma = roots.find(',');
-    const std::string_view first = roots.substr(0, comma);
-    std::int64_t result = 0;
-    const auto parsed = std::from_chars(first.data(), first.data() + first.size(), result);
-    if (parsed.ec != std::errc{} || parsed.ptr != first.data() + first.size() || result <= 0) return std::nullopt;
-    return result;
+    const auto parsed = parse_roots(roots);
+    if (parsed.empty()) return std::nullopt;
+    return parsed.front();
 }
 
 std::optional<std::int64_t> hive_for_key(sqlite3* source, std::int64_t key_id)
@@ -203,6 +230,65 @@ void write_metadata(sqlite3* map, std::string_view key, std::string_view value)
     if (sqlite3_step(statement.get()) != SQLITE_DONE) throw std::runtime_error(sqlite3_errmsg(map));
 }
 
+void attach_owned_sources(
+    sqlite3* source,
+    sqlite3* map,
+    std::string_view mode,
+    std::string_view roots_text,
+    std::size_t value_offset,
+    std::size_t value_limit,
+    std::int64_t semantic_group)
+{
+    const auto roots = parse_roots(roots_text);
+    if (mode == "own")
+    {
+        if (roots.size() != 1U) throw std::runtime_error("Invalid own semantic job root count");
+        const std::int64_t key_id = roots.front();
+        if (value_offset == 0U) insert_source(map, semantic_group, "rk:" + std::to_string(key_id));
+
+        const std::string sql = value_limit == 0U
+            ? "SELECT id FROM registry_values WHERE key_id=?1 ORDER BY id;"
+            : "SELECT id FROM registry_values WHERE key_id=?1 ORDER BY id LIMIT ?2 OFFSET ?3;";
+        statement_t values(source, sql);
+        sqlite3_bind_int64(values.get(), 1, key_id);
+        if (value_limit != 0U)
+        {
+            sqlite3_bind_int64(values.get(), 2, static_cast<sqlite3_int64>(value_limit));
+            sqlite3_bind_int64(values.get(), 3, static_cast<sqlite3_int64>(value_offset));
+        }
+        while (sqlite3_step(values.get()) == SQLITE_ROW)
+            insert_source(map, semantic_group, "rv:" + std::to_string(sqlite3_column_int64(values.get(), 0)));
+        return;
+    }
+
+    if (mode != "subtree") throw std::runtime_error("Unknown semantic job mode while attaching sources");
+    std::ostringstream seeds;
+    for (std::size_t index = 0; index < roots.size(); ++index)
+    {
+        if (index != 0U) seeds << " UNION ALL ";
+        seeds << "SELECT ?" << (index + 1U);
+    }
+    const std::string sql = "WITH RECURSIVE tree(id) AS (" + seeds.str() +
+        " UNION ALL SELECT k.id FROM registry_keys k JOIN tree t ON k.parent_id=t.id) "
+        "SELECT t.id,v.id FROM tree t LEFT JOIN registry_values v ON v.key_id=t.id ORDER BY t.id,v.id;";
+    statement_t rows(source, sql);
+    for (std::size_t index = 0; index < roots.size(); ++index)
+        sqlite3_bind_int64(rows.get(), static_cast<int>(index + 1U), roots[index]);
+
+    std::int64_t previous_key = -1;
+    while (sqlite3_step(rows.get()) == SQLITE_ROW)
+    {
+        const std::int64_t key_id = sqlite3_column_int64(rows.get(), 0);
+        if (key_id != previous_key)
+        {
+            previous_key = key_id;
+            insert_source(map, semantic_group, "rk:" + std::to_string(key_id));
+        }
+        if (sqlite3_column_type(rows.get(), 1) != SQLITE_NULL)
+            insert_source(map, semantic_group, "rv:" + std::to_string(sqlite3_column_int64(rows.get(), 1)));
+    }
+}
+
 } // namespace
 
 int wmain(int argc, wchar_t** argv)
@@ -245,6 +331,39 @@ int wmain(int argc, wchar_t** argv)
                 insert_edge(map.get(), root, "contains", node);
             }
 
+            // First, attach every raw source object owned by every completed job to
+            // that job's semantic group. This is independent of what the model chose
+            // to cite, so source coverage is exact even for deterministic lifts or
+            // deliberately unclassified evidence.
+            const char* coverage_sql = R"SQL(
+SELECT j.id,j.mode,j.roots,j.value_offset,j.value_limit,n.id
+FROM lift_jobs j
+JOIN semantic_nodes n ON n.job_id=j.id AND n.local_id='group'
+WHERE j.status IN (2,3)
+ORDER BY j.id;
+)SQL";
+            statement_t coverage_jobs(map.get(), coverage_sql);
+            while (sqlite3_step(coverage_jobs.get()) == SQLITE_ROW)
+            {
+                const std::string mode = text(coverage_jobs.get(), 1);
+                const std::string roots = text(coverage_jobs.get(), 2);
+                const std::size_t value_offset = static_cast<std::size_t>(std::max<std::int64_t>(0, sqlite3_column_int64(coverage_jobs.get(), 3)));
+                const std::size_t value_limit = static_cast<std::size_t>(std::max<std::int64_t>(0, sqlite3_column_int64(coverage_jobs.get(), 4)));
+                const std::int64_t group_id = sqlite3_column_int64(coverage_jobs.get(), 5);
+                attach_owned_sources(source.get(), map.get(), mode, roots, value_offset, value_limit, group_id);
+            }
+
+            const std::int64_t expected_sources =
+                scalar_i64(source.get(), "SELECT COUNT(*) FROM registry_keys;") +
+                scalar_i64(source.get(), "SELECT COUNT(*) FROM registry_values;");
+            const std::int64_t linked_sources = scalar_i64(
+                map.get(),
+                "SELECT COUNT(DISTINCT source_ref) FROM semantic_sources WHERE source_ref LIKE 'rk:%' OR source_ref LIKE 'rv:%';");
+            if (linked_sources != expected_sources)
+                throw std::runtime_error("Semantic raw-source coverage invariant failed");
+
+            // With complete source links in place, reconstruct cross-work-unit
+            // containment deterministically from exact registry parentage.
             const char* jobs_sql = R"SQL(
 SELECT j.id,j.parent_context_id,j.roots,j.path,n.id
 FROM lift_jobs j
@@ -291,6 +410,8 @@ ORDER BY j.id;
                 ++linked;
             }
 
+            write_metadata(map.get(), "source_coverage_complete", "1");
+            write_metadata(map.get(), "source_ref_count", std::to_string(linked_sources));
             write_metadata(map.get(), "hierarchy_complete", "1");
             write_metadata(map.get(), "hierarchy_version", "1");
             write_metadata(map.get(), "hierarchy_link_count", std::to_string(linked));
@@ -298,7 +419,8 @@ ORDER BY j.id;
             exec(map.get(), "COMMIT;");
 
             std::cout << "semantic hierarchy: " << linked << " work groups linked"
-                      << " | " << fallback << " hive fallbacks\n";
+                      << " | " << fallback << " hive fallbacks"
+                      << " | " << linked_sources << '/' << expected_sources << " raw sources represented\n";
         }
         catch (...)
         {
