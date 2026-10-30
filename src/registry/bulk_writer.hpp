@@ -46,7 +46,6 @@ public:
 
 	status_t add_value(
 		database::object_id_t key_id,
-		std::uint32_t cell_offset,
 		std::string name,
 		std::uint32_t value_type,
 		std::vector<std::byte> data,
