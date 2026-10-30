@@ -7,7 +7,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $source = [System.IO.File]::ReadAllText($Base)
 $oldSignature = 'std::string api_semantic_status(const std::filesystem::path& source)'
-$newSignature = 'std::string api_semantic_status_full(const std::filesystem::path& source)'
+$newSignature = '[[maybe_unused]] std::string api_semantic_status_full(const std::filesystem::path& source)'
 $signatureIndex = $source.IndexOf($oldSignature, [System.StringComparison]::Ordinal)
 if ($signatureIndex -lt 0) {
     throw 'Unable to find Atlas semantic status implementation'
