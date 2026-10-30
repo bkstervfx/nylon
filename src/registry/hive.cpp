@@ -224,6 +224,97 @@ result_t<hive_t> hive_t::open(const std::filesystem::path& path)
 	return result_t<hive_t>::success(hive_t(std::move(impl)));
 }
 
+result_t<std::uint32_t> hive_t::root_key_offset() const
+{
+	if (!impl_)
+	{
+		return result_t<std::uint32_t>::failure("Registry hive is not open", ERROR_INVALID_HANDLE);
+	}
+	return result_t<std::uint32_t>::success(impl_->root_offset);
+}
+
+result_t<std::vector<key_ref_t>> hive_t::subkeys(std::uint32_t key_offset) const
+{
+	if (!impl_)
+	{
+		return result_t<std::vector<key_ref_t>>::failure("Registry hive is not open", ERROR_INVALID_HANDLE);
+	}
+
+	auto offsets = impl_->subkey_offsets(key_offset);
+	if (!offsets.ok())
+	{
+		return result_t<std::vector<key_ref_t>>::failure(offsets.error().message, offsets.error().code);
+	}
+
+	std::vector<key_ref_t> result;
+	result.reserve(offsets.value().size());
+	for (const std::uint32_t offset : offsets.value())
+	{
+		auto name = impl_->key_name(offset);
+		if (!name.ok())
+		{
+			return result_t<std::vector<key_ref_t>>::failure(name.error().message, name.error().code);
+		}
+		result.push_back(key_ref_t{ offset, std::move(name).value() });
+	}
+
+	std::sort(result.begin(), result.end(), [](const key_ref_t& left, const key_ref_t& right)
+	{
+		return ordinal_less_t{}(left.name, right.name);
+	});
+	for (std::size_t index = 1; index < result.size(); ++index)
+	{
+		if (equal_ordinal_ignore_case(result[index - 1U].name, result[index].name))
+		{
+			return result_t<std::vector<key_ref_t>>::failure(
+				"Registry key contains duplicate subkey names",
+				ERROR_BADDB);
+		}
+	}
+	return result_t<std::vector<key_ref_t>>::success(std::move(result));
+}
+
+result_t<std::vector<value_t>> hive_t::values(std::uint32_t key_offset) const
+{
+	if (!impl_)
+	{
+		return result_t<std::vector<value_t>>::failure("Registry hive is not open", ERROR_INVALID_HANDLE);
+	}
+
+	auto offsets = impl_->value_offsets(key_offset);
+	if (!offsets.ok())
+	{
+		return result_t<std::vector<value_t>>::failure(offsets.error().message, offsets.error().code);
+	}
+
+	std::vector<value_t> result;
+	result.reserve(offsets.value().size());
+	for (const std::uint32_t offset : offsets.value())
+	{
+		auto parsed = impl_->parse_value(offset);
+		if (!parsed.ok())
+		{
+			return result_t<std::vector<value_t>>::failure(parsed.error().message, parsed.error().code);
+		}
+		result.push_back(std::move(parsed).value());
+	}
+
+	std::sort(result.begin(), result.end(), [](const value_t& left, const value_t& right)
+	{
+		return ordinal_less_t{}(left.name, right.name);
+	});
+	for (std::size_t index = 1; index < result.size(); ++index)
+	{
+		if (equal_ordinal_ignore_case(result[index - 1U].name, result[index].name))
+		{
+			return result_t<std::vector<value_t>>::failure(
+				"Registry key contains duplicate value names",
+				ERROR_BADDB);
+		}
+	}
+	return result_t<std::vector<value_t>>::success(std::move(result));
+}
+
 result_t<std::vector<std::wstring>> hive_t::subkeys(std::wstring_view path) const
 {
 	if (!impl_)
@@ -232,43 +323,22 @@ result_t<std::vector<std::wstring>> hive_t::subkeys(std::wstring_view path) cons
 	}
 
 	auto key = impl_->key_offset(path);
-
 	if (!key.ok())
 	{
 		return result_t<std::vector<std::wstring>>::failure(key.error().message, key.error().code);
 	}
 
-	auto offsets = impl_->subkey_offsets(key.value());
-
-	if (!offsets.ok())
+	auto direct = subkeys(key.value());
+	if (!direct.ok())
 	{
-		return result_t<std::vector<std::wstring>>::failure(offsets.error().message, offsets.error().code);
+		return result_t<std::vector<std::wstring>>::failure(direct.error().message, direct.error().code);
 	}
 
 	std::vector<std::wstring> result;
-	result.reserve(offsets.value().size());
-
-	for (const std::uint32_t offset : offsets.value())
+	result.reserve(direct.value().size());
+	for (auto& child : direct.value())
 	{
-		auto name = impl_->key_name(offset);
-
-		if (!name.ok())
-		{
-			return result_t<std::vector<std::wstring>>::failure(name.error().message, name.error().code);
-		}
-
-		result.push_back(std::move(name).value());
-	}
-
-	std::sort(result.begin(), result.end(), ordinal_less_t{});
-	for (std::size_t index = 1; index < result.size(); ++index)
-	{
-		if (equal_ordinal_ignore_case(result[index - 1U], result[index]))
-		{
-			return result_t<std::vector<std::wstring>>::failure(
-				"Registry key contains duplicate subkey names",
-				ERROR_BADDB);
-		}
+		result.push_back(std::move(child.name));
 	}
 	return result_t<std::vector<std::wstring>>::success(std::move(result));
 }
@@ -281,52 +351,11 @@ result_t<std::vector<value_t>> hive_t::values(std::wstring_view path) const
 	}
 
 	auto key = impl_->key_offset(path);
-
 	if (!key.ok())
 	{
 		return result_t<std::vector<value_t>>::failure(key.error().message, key.error().code);
 	}
-
-	auto offsets = impl_->value_offsets(key.value());
-
-	if (!offsets.ok())
-	{
-		return result_t<std::vector<value_t>>::failure(offsets.error().message, offsets.error().code);
-	}
-
-	std::vector<value_t> result;
-	result.reserve(offsets.value().size());
-
-	for (const std::uint32_t offset : offsets.value())
-	{
-		auto parsed = impl_->parse_value(offset);
-
-		if (!parsed.ok())
-		{
-			return result_t<std::vector<value_t>>::failure(parsed.error().message, parsed.error().code);
-		}
-
-		result.push_back(std::move(parsed).value());
-	}
-
-	std::sort(
-		result.begin(),
-		result.end(),
-		[](const value_t& left, const value_t& right)
-		{
-			return ordinal_less_t{}(left.name, right.name);
-		});
-	for (std::size_t index = 1; index < result.size(); ++index)
-	{
-		if (equal_ordinal_ignore_case(result[index - 1U].name, result[index].name))
-		{
-			return result_t<std::vector<value_t>>::failure(
-				"Registry key contains duplicate value names",
-				ERROR_BADDB);
-		}
-	}
-
-	return result_t<std::vector<value_t>>::success(std::move(result));
+	return values(key.value());
 }
 
 result_t<std::optional<value_t>> hive_t::value(
