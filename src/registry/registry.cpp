@@ -10,6 +10,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -122,6 +123,13 @@ bool is_user_hive_candidate(const std::filesystem::path& path)
 	const auto filename = path.filename().native();
 	return equal_ordinal_ignore_case(filename, L"NTUSER.DAT") ||
 		equal_ordinal_ignore_case(filename, L"UsrClass.dat");
+}
+
+bool path_not_found(const std::error_code& error) noexcept
+{
+	return error == std::errc::no_such_file_or_directory ||
+		error.value() == ERROR_FILE_NOT_FOUND ||
+		error.value() == ERROR_PATH_NOT_FOUND;
 }
 
 status_t record_hive_error(
@@ -263,8 +271,6 @@ status_t scan_hive(
 			return status_t::failure("Registry key hierarchy exceeds the supported depth", ERROR_BADDB);
 		}
 
-		// subkeys() is sorted ascending. Push in reverse so the LIFO stack
-		// retains the same deterministic ascending visit order.
 		for (auto iterator = subkeys_result.value().rbegin(); iterator != subkeys_result.value().rend(); ++iterator)
 		{
 			auto child_name_result = platform::utf8(iterator->name);
@@ -383,10 +389,28 @@ status_t scan_all(
 		const auto& path = path_result.value();
 		std::error_code error;
 		const bool exists = std::filesystem::is_regular_file(path, error);
-		if (error) return status_t::failure("Unable to inspect registry hive path", error.value());
+		if (error)
+		{
+			if (path_not_found(error))
+			{
+				if (specification.required)
+				{
+					return status_t::failure(
+						std::string("Required offline registry hive is missing: ") + specification.name,
+						ERROR_FILE_NOT_FOUND);
+				}
+				continue;
+			}
+			return status_t::failure("Unable to inspect registry hive path", error.value());
+		}
 		if (!exists)
 		{
-			if (specification.required) return status_t::failure(std::string("Required offline registry hive is missing: ") + specification.name, ERROR_FILE_NOT_FOUND);
+			if (specification.required)
+			{
+				return status_t::failure(
+					std::string("Required offline registry hive is missing: ") + specification.name,
+					ERROR_FILE_NOT_FOUND);
+			}
 			continue;
 		}
 		scanned.insert(path.lexically_normal().native());
@@ -418,11 +442,18 @@ status_t scan_all(
 		if (!root_result.ok()) return status_t::failure(root_result.error().message, root_result.error().code);
 		const auto& root = root_result.value();
 		error.clear();
-		if (!std::filesystem::is_directory(root, error))
+		const bool is_directory = std::filesystem::is_directory(root, error);
+		if (error)
 		{
-			if (error) return status_t::failure("Unable to inspect registry hive search root", error.value());
-			continue;
+			if (path_not_found(error))
+			{
+				error.clear();
+				continue;
+			}
+			return status_t::failure("Unable to inspect registry hive search root", error.value());
 		}
+		if (!is_directory) continue;
+
 		candidates.clear();
 		for (std::filesystem::recursive_directory_iterator iterator(root, std::filesystem::directory_options::skip_permission_denied, error); !error && iterator != std::filesystem::recursive_directory_iterator(); iterator.increment(error))
 		{
