@@ -102,6 +102,16 @@ public:
 		std::string_view detail = {});
 	status_t finalize_graph();
 
+	[[nodiscard]] sqlite3* native_handle() const noexcept
+	{
+		return database_;
+	}
+
+	void close() noexcept
+	{
+		reset();
+	}
+
 private:
 	explicit database_t(sqlite3* database) noexcept;
 
