@@ -7,6 +7,7 @@ Before making architectural changes, read completely:
 - `docs/PRODUCT_GOAL.md`
 - `docs/ARCHITECTURE.md`
 - `docs/HISTORICAL_AUDIT_NOTES.md`
+- `docs/VALIDATION_NOTES.md`
 - `README.md`
 
 ## Authority and evidence
@@ -17,8 +18,9 @@ Use this hierarchy:
 2. `docs/PRODUCT_GOAL.md` defines the product mission and completion semantics.
 3. `docs/ARCHITECTURE.md` defines the intended long-term architecture.
 4. `docs/HISTORICAL_AUDIT_NOTES.md` records prior evidence, useful Windows locations, and known failed approaches. It is historical input, not proof of current implementation.
-5. `README.md` documents current user-facing behavior.
-6. Actual source, build scripts, CI/tests, and Git history establish what is implemented today.
+5. `docs/VALIDATION_NOTES.md` records observed real-image/hardware behavior. It is evidence about those observed runs, not a universal guarantee or substitute for current source/CI inspection.
+6. `README.md` documents current user-facing behavior.
+7. Actual source, build scripts, CI/tests, and Git history establish what is implemented today.
 
 Do not mistake a target requirement for an implemented feature. If documentation and implementation disagree, report the disagreement before changing architecture.
 
