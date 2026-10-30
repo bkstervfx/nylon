@@ -1,0 +1,16 @@
+format=1
+model_name=Qwen3.5-4B
+model_repo=SoAIHQ/Qwen3.5-4B-GGUF
+model_file=Qwen3.5-4B-Q8_0.gguf
+model_quant=Q8_0
+model_sha256=5b25856e42534b000b5e06d7cfc10c756931f4dc66a4ca6ef08d835bd233a833
+model_source_revision=5f113e0
+model_original_revision=851bf6e806
+model_license=Apache-2.0
+llama_cpp_tag=b11146
+llama_cpp_commit=7fe450e19305b828c199d602c23a8337aaa1f03b
+llama_cpp_asset=llama-b11146-bin-win-vulkan-x64.zip
+llama_cpp_sha256=55a378aa095b466979d85075234f66d7655c7a7483222af0c006c0e55b4d7bd6
+ontology_version=1
+planner_version=1
+prompt_version=1
