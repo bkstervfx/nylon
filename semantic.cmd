@@ -9,6 +9,7 @@ set "SEMANTIC=%ROOT%\bin\nylon-semantic.exe"
 set "CLASSIFIER=%ROOT%\bin\nylon-semantic-classify.exe"
 set "LINKER=%ROOT%\bin\nylon-semantic-link.exe"
 set "VIEWER=%ROOT%\bin\nylon-viewer.exe"
+set "VIEWER_MARKER=%ROOT%\bin\nylon-viewer.semantic-v1"
 
 if not exist "%SEMANTIC%" goto build_semantic
 if not exist "%CLASSIFIER%" goto build_semantic
@@ -21,12 +22,16 @@ call "%ROOT%\build-semantic.cmd"
 if errorlevel 1 exit /b 1
 
 :semantic_built
-if not exist "%VIEWER%" (
-    echo Nylon Viewer is not built yet. Building it now...
-    call "%ROOT%\build-viewer.cmd"
-    if errorlevel 1 exit /b 1
-)
+if not exist "%VIEWER%" goto build_viewer
+if not exist "%VIEWER_MARKER%" goto build_viewer
+goto viewer_built
 
+:build_viewer
+echo Nylon Viewer is missing or predates semantic progress support. Rebuilding it now...
+call "%ROOT%\build-viewer.cmd"
+if errorlevel 1 exit /b 1
+
+:viewer_built
 rem Build the exact work map, then classify high-volume Windows namespaces
 rem deterministically before any model/runtime setup is required.
 "%SEMANTIC%" "%DB%" --plan-only
