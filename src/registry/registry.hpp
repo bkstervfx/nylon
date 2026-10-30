@@ -24,6 +24,7 @@ namespace nylon::registry
 
 struct value_t
 {
+	std::uint32_t offset = 0;
 	std::wstring name;
 	std::uint32_t type = 0;
 	std::vector<std::byte> data;
@@ -75,15 +76,6 @@ private:
 
 	std::unique_ptr<impl_t> impl_;
 };
-
-[[nodiscard]] std::string key_object_key(
-	std::string_view hive,
-	std::string_view relative_path);
-
-[[nodiscard]] std::string value_object_key(
-	std::string_view hive,
-	std::string_view relative_path,
-	std::string_view value_name);
 
 status_t scan_all(
 	const image::image_t& image,
