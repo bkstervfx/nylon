@@ -1,5 +1,5 @@
 @echo off
-setlocal EnableExtensions EnableDelayedExpansion
+setlocal EnableExtensions
 
 cd /d "%~dp0"
 set "ROOT=%CD%"
@@ -8,7 +8,7 @@ if "%DB%"=="" set "DB=%ROOT%\output\image.db"
 set "SEMANTIC=%ROOT%\bin\nylon-semantic.exe"
 set "CLASSIFIER=%ROOT%\bin\nylon-semantic-classify.exe"
 set "LINKER=%ROOT%\bin\nylon-semantic-link.exe"
-set "SEMANTIC_MARKER=%ROOT%\bin\nylon-semantic.request-v3"
+set "SEMANTIC_MARKER=%ROOT%\bin\nylon-semantic.performance-v1"
 set "VIEWER=%ROOT%\bin\nylon-viewer.exe"
 set "VIEWER_MARKER=%ROOT%\bin\nylon-viewer.atlas-v1"
 
@@ -19,7 +19,7 @@ if not exist "%SEMANTIC_MARKER%" goto build_semantic
 goto semantic_built
 
 :build_semantic
-echo Nylon Semantic Lifter is missing or predates request contract v3. Building it now...
+echo Nylon Semantic Lifter is missing or predates the optimized runtime. Building it now...
 call "%ROOT%\build-semantic.cmd"
 if errorlevel 1 exit /b 1
 
@@ -34,18 +34,20 @@ call "%ROOT%\build-viewer.cmd"
 if errorlevel 1 exit /b 1
 
 :viewer_built
-rem Build the exact work map, then classify high-volume Windows namespaces
-rem deterministically before any model/runtime setup is required.
+rem First invocation creates the work plan only when one does not already exist.
+rem Compatible resumptions reuse the persisted plan instead of rescanning image.db.
 "%SEMANTIC%" "%DB%" --plan-only
 if errorlevel 1 exit /b 1
+
+rem Mark additional high-volume Windows namespaces as deterministic.
 "%CLASSIFIER%" "%DB%"
 if errorlevel 1 exit /b 1
 
-rem Commit every free deterministic lift before opening the Atlas.
-"%SEMANTIC%" "%DB%" --plan-only
+rem Materialize newly classified work without rebuilding the plan or loading the model.
+"%SEMANTIC%" "%DB%" --deterministic-only
 if errorlevel 1 exit /b 1
 
-rem Atlas opens immediately and represents the complete work map while lifting continues.
+rem Atlas opens with every free deterministic unit already committed.
 start "Nylon Viewer" "%VIEWER%" "%DB%"
 
 if "%LOCALAPPDATA%"=="" (
@@ -63,17 +65,11 @@ call "%ROOT%\semantic-setup.cmd"
 if errorlevel 1 exit /b 1
 
 :run
-set /a "SEMANTIC_PASS=0"
-:run_pass
-set /a "SEMANTIC_PASS+=1"
+rem The optimized semantic runtime keeps llama.cpp resident while it performs
+rem its retry rounds. There is deliberately no outer retry loop here.
 "%SEMANTIC%" "%DB%"
-set "SEMANTIC_RC=!ERRORLEVEL!"
-if "!SEMANTIC_RC!"=="2" if !SEMANTIC_PASS! LSS 3 (
-    echo Retrying incomplete semantic work ^(pass !SEMANTIC_PASS! of 3 complete^)...
-    goto run_pass
-)
-if not "!SEMANTIC_RC!"=="0" exit /b !SEMANTIC_RC!
+if errorlevel 1 exit /b %ERRORLEVEL%
 
 echo Building deterministic semantic hierarchy...
 "%LINKER%" "%DB%"
-exit /b !ERRORLEVEL!
+exit /b %ERRORLEVEL%
