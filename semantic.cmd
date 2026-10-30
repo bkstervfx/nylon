@@ -1,5 +1,5 @@
 @echo off
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
 
 cd /d "%~dp0"
 set "ROOT=%CD%"
@@ -39,5 +39,13 @@ call "%ROOT%\semantic-setup.cmd"
 if errorlevel 1 exit /b 1
 
 :run
+set /a "SEMANTIC_PASS=0"
+:run_pass
+set /a "SEMANTIC_PASS+=1"
 "%SEMANTIC%" "%DB%"
-exit /b %ERRORLEVEL%
+set "SEMANTIC_RC=!ERRORLEVEL!"
+if "!SEMANTIC_RC!"=="2" if !SEMANTIC_PASS! LSS 3 (
+    echo Retrying incomplete semantic work ^(pass !SEMANTIC_PASS! of 3 complete^)...
+    goto run_pass
+)
+exit /b !SEMANTIC_RC!
