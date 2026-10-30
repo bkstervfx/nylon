@@ -1,11 +1,12 @@
 #include "registry.hpp"
+#include "bulk_writer.hpp"
 #include "detail.hpp"
 
 #include <Windows.h>
 
 #include <algorithm>
-#include <charconv>
 #include <cstring>
+#include <optional>
 #include <set>
 #include <span>
 #include <string>
@@ -28,10 +29,12 @@ constexpr std::uint64_t progress_batch_size = 128U;
 
 struct pending_key_t
 {
+	database::object_id_t id = 0;
+	database::object_id_t hive_id = 0;
+	std::optional<database::object_id_t> parent_id;
 	std::uint32_t offset = 0;
 	std::string path;
 	std::string name;
-	database::object_id_t parent = 0;
 	std::size_t depth = 0;
 };
 
@@ -69,7 +72,6 @@ result_t<std::optional<std::string>> value_text(const value_t& value)
 
 	const std::wstring& text = decoded.value();
 	std::wstring joined;
-
 	if (value.type == REG_MULTI_SZ)
 	{
 		std::size_t cursor = 0;
@@ -80,13 +82,13 @@ result_t<std::optional<std::string>> value_text(const value_t& value)
 			if (end == cursor) break;
 			if (!joined.empty()) joined.push_back(L'\n');
 			joined.append(text.data() + cursor, end - cursor);
-			cursor = end + 1;
+			cursor = end + 1U;
 		}
 	}
 	else
 	{
 		std::size_t length = text.size();
-		while (length > 0 && text[length - 1] == L'\0') --length;
+		while (length > 0 && text[length - 1U] == L'\0') --length;
 		joined.assign(text.data(), length);
 	}
 
@@ -95,27 +97,8 @@ result_t<std::optional<std::string>> value_text(const value_t& value)
 	{
 		return result_t<std::optional<std::string>>::failure(converted.error().message, converted.error().code);
 	}
-	return result_t<std::optional<std::string>>::success(std::optional<std::string>(std::move(converted).value()));
-}
-
-std::string join_key(std::string_view left, std::string_view right)
-{
-	if (right.empty()) return std::string(left);
-	std::string value;
-	value.reserve(left.size() + 1U + right.size());
-	value.append(left);
-	value.push_back('\\');
-	value.append(right);
-	return value;
-}
-
-void append_identity_component(std::string& output, std::string_view value)
-{
-	char length[32]{};
-	const auto converted = std::to_chars(std::begin(length), std::end(length), value.size());
-	output.append(length, converted.ptr);
-	output.push_back(':');
-	output.append(value);
+	return result_t<std::optional<std::string>>::success(
+		std::optional<std::string>(std::move(converted).value()));
 }
 
 bool is_user_hive_candidate(const std::filesystem::path& path)
@@ -164,6 +147,7 @@ status_t scan_hive(
 	std::string_view hive_name,
 	bool required,
 	database::database_t& database,
+	bulk_writer_t& writer,
 	progress::registry_state_t* progress_state)
 {
 	auto hive_result = hive_t::open(path);
@@ -177,24 +161,34 @@ status_t scan_hive(
 
 	if (progress_state != nullptr) progress_state->hive(hive_name);
 
+	auto source_path_result = platform::utf8(path.generic_wstring());
+	if (!source_path_result.ok())
+	{
+		return status_t::failure(source_path_result.error().message, source_path_result.error().code);
+	}
+	auto hive_id_result = writer.add_hive(hive_name, source_path_result.value(), required);
+	if (!hive_id_result.ok())
+	{
+		return status_t::failure(hive_id_result.error().message, hive_id_result.error().code);
+	}
+	const database::object_id_t hive_id = hive_id_result.value();
+
 	auto hive = std::move(hive_result).value();
 	auto root_offset = hive.root_key_offset();
 	if (!root_offset.ok()) return status_t::failure(root_offset.error().message, root_offset.error().code);
-
-	auto hive_object = database.insert_object("registry_hive", std::string(hive_name), std::string(hive_name));
-	if (!hive_object.ok()) return status_t::failure(hive_object.error().message, hive_object.error().code);
 
 	std::uint64_t unpublished_keys = 0U;
 	std::uint64_t unpublished_values = 0U;
 	std::vector<pending_key_t> pending;
 	pending.reserve(4096U);
 	pending.push_back(pending_key_t{
+		writer.allocate_key_id(),
+		hive_id,
+		std::nullopt,
 		root_offset.value(),
-		{},
 		std::string(hive_name),
-		hive_object.value(),
-		0U
-	});
+		std::string(hive_name),
+		0U });
 
 	while (!pending.empty())
 	{
@@ -205,70 +199,52 @@ status_t scan_hive(
 			return status_t::failure("Registry key hierarchy exceeds the supported depth", ERROR_BADDB);
 		}
 
-		const std::string object_key = key_object_key(hive_name, current.path);
-		const std::string display_path = join_key(hive_name, current.path);
-		auto key_object = database.insert_object(
-			"registry_key",
-			object_key,
-			current.name,
-			display_path,
-			current.parent);
-		if (!key_object.ok()) return status_t::failure(key_object.error().message, key_object.error().code);
-
 		auto values_result = hive.values(current.offset);
-		if (!values_result.ok()) return status_t::failure(values_result.error().message, values_result.error().code);
+		if (!values_result.ok())
+		{
+			return status_t::failure(values_result.error().message, values_result.error().code);
+		}
+
+		auto subkeys_result = hive.subkeys(current.offset);
+		if (!subkeys_result.ok())
+		{
+			return status_t::failure(subkeys_result.error().message, subkeys_result.error().code);
+		}
+		if (!subkeys_result.value().empty() && current.depth >= max_registry_key_depth)
+		{
+			return status_t::failure("Registry key hierarchy exceeds the supported depth", ERROR_BADDB);
+		}
+
 		++unpublished_keys;
 		unpublished_values += static_cast<std::uint64_t>(values_result.value().size());
 		if (progress_state != nullptr && unpublished_keys >= progress_batch_size)
 		{
-			progress_state->batch(unpublished_keys, unpublished_values, display_path);
+			progress_state->batch(unpublished_keys, unpublished_values, current.path);
 			unpublished_keys = 0U;
 			unpublished_values = 0U;
 		}
 
-		for (const auto& value : values_result.value())
+		for (auto& value : values_result.value())
 		{
 			auto value_name_result = platform::utf8(value.name);
 			if (!value_name_result.ok())
 			{
 				return status_t::failure(value_name_result.error().message, value_name_result.error().code);
 			}
-			const std::string& value_name = value_name_result.value();
-			const std::string value_key = value_object_key(hive_name, current.path, value_name);
-			std::string value_path;
-			value_path.reserve(display_path.size() + 2U + value_name.size());
-			value_path.append(display_path);
-			value_path.append("::");
-			value_path.append(value_name);
-			auto value_object = database.insert_object(
-				"registry_value",
-				value_key,
-				value_name.empty() ? "(Default)" : value_name,
-				value_path,
-				key_object.value());
-			if (!value_object.ok()) return status_t::failure(value_object.error().message, value_object.error().code);
-
-			auto raw = database.registry_data(
-				value_object.value(),
-				value.type,
-				std::span<const std::byte>(value.data.data(), value.data.size()));
-			if (!raw.ok()) return raw;
-			auto type = database.property(value_object.value(), "type", std::to_string(value.type));
-			if (!type.ok()) return type;
 			auto text_result = value_text(value);
-			if (!text_result.ok()) return status_t::failure(text_result.error().message, text_result.error().code);
-			if (text_result.value().has_value())
+			if (!text_result.ok())
 			{
-				auto property = database.property(value_object.value(), "text", *text_result.value());
-				if (!property.ok()) return property;
+				return status_t::failure(text_result.error().message, text_result.error().code);
 			}
-		}
 
-		auto subkeys_result = hive.subkeys(current.offset);
-		if (!subkeys_result.ok()) return status_t::failure(subkeys_result.error().message, subkeys_result.error().code);
-		if (!subkeys_result.value().empty() && current.depth >= max_registry_key_depth)
-		{
-			return status_t::failure("Registry key hierarchy exceeds the supported depth", ERROR_BADDB);
+			auto status = writer.add_value(
+				current.id,
+				0U,
+				std::move(value_name_result).value(),
+				value.type,
+				std::move(value.data),
+				std::move(text_result).value());
+			if (!status.ok()) return status;
 		}
 
 		for (auto iterator = subkeys_result.value().rbegin(); iterator != subkeys_result.value().rend(); ++iterator)
@@ -280,18 +256,28 @@ status_t scan_hive(
 			}
 			std::string child_name = std::move(child_name_result).value();
 			std::string child_path;
-			child_path.reserve(current.path.size() + (current.path.empty() ? 0U : 1U) + child_name.size());
+			child_path.reserve(current.path.size() + 1U + child_name.size());
 			child_path.append(current.path);
-			if (!child_path.empty()) child_path.push_back('\\');
+			child_path.push_back('\\');
 			child_path.append(child_name);
 			pending.push_back(pending_key_t{
+				writer.allocate_key_id(),
+				hive_id,
+				current.id,
 				iterator->offset,
 				std::move(child_path),
 				std::move(child_name),
-				key_object.value(),
-				current.depth + 1U
-			});
+				current.depth + 1U });
 		}
+
+		auto status = writer.add_key(
+			current.id,
+			current.hive_id,
+			current.parent_id,
+			current.offset,
+			std::move(current.name),
+			std::move(current.path));
+		if (!status.ok()) return status;
 	}
 
 	if (progress_state != nullptr && (unpublished_keys != 0U || unpublished_values != 0U))
@@ -327,6 +313,7 @@ bool has_primary_hive_header(const std::filesystem::path& path)
 status_t scan_optional_hive_path(
 	const image::image_t& image,
 	database::database_t& database,
+	bulk_writer_t& writer,
 	const std::filesystem::path& path,
 	std::set<std::wstring, ordinal_less_t>& scanned,
 	progress::registry_state_t* progress_state)
@@ -337,30 +324,9 @@ status_t scan_optional_hive_path(
 	if (!relative.ok()) return status_t::failure(relative.error().message, relative.error().code);
 	std::string label = "HIVE:";
 	label.append(relative.value());
-	return scan_hive(path, label, false, database, progress_state);
+	return scan_hive(path, label, false, database, writer, progress_state);
 }
 
-}
-
-std::string key_object_key(std::string_view hive, std::string_view relative_path)
-{
-	std::string result;
-	result.reserve(1U + 24U + hive.size() + relative_path.size());
-	result.push_back('K');
-	append_identity_component(result, hive);
-	append_identity_component(result, relative_path);
-	return result;
-}
-
-std::string value_object_key(std::string_view hive, std::string_view relative_path, std::string_view value_name)
-{
-	std::string result;
-	result.reserve(1U + 36U + hive.size() + relative_path.size() + value_name.size());
-	result.push_back('V');
-	append_identity_component(result, hive);
-	append_identity_component(result, relative_path);
-	append_identity_component(result, value_name);
-	return result;
 }
 
 status_t scan_all(
@@ -368,6 +334,13 @@ status_t scan_all(
 	database::database_t& database,
 	progress::registry_state_t* progress_state)
 {
+	auto writer_result = bulk_writer_t::create(database);
+	if (!writer_result.ok())
+	{
+		return status_t::failure(writer_result.error().message, writer_result.error().code);
+	}
+	auto writer = std::move(writer_result).value();
+
 	struct hive_spec_t { const wchar_t* relative_path; const char* name; bool required; };
 	const hive_spec_t known_hives[] = {
 		{ L"Windows\\System32\\config\\SOFTWARE", "SOFTWARE", true },
@@ -414,7 +387,13 @@ status_t scan_all(
 			continue;
 		}
 		scanned.insert(path.lexically_normal().native());
-		auto result = scan_hive(path, specification.name, specification.required, database, progress_state);
+		auto result = scan_hive(
+			path,
+			specification.name,
+			specification.required,
+			database,
+			writer,
+			progress_state);
 		if (!result.ok()) return result;
 	}
 
@@ -423,16 +402,24 @@ status_t scan_all(
 	const auto& config_root = config_result.value();
 	std::error_code error;
 	std::vector<std::filesystem::path> candidates;
-	for (std::filesystem::directory_iterator iterator(config_root, std::filesystem::directory_options::skip_permission_denied, error); !error && iterator != std::filesystem::directory_iterator(); iterator.increment(error))
+	for (std::filesystem::directory_iterator iterator(
+		config_root,
+		std::filesystem::directory_options::skip_permission_denied,
+		error);
+		!error && iterator != std::filesystem::directory_iterator();
+		iterator.increment(error))
 	{
 		std::error_code entry_error;
-		if (iterator->is_regular_file(entry_error) && !entry_error && has_primary_hive_header(iterator->path())) candidates.push_back(iterator->path());
+		if (iterator->is_regular_file(entry_error) && !entry_error && has_primary_hive_header(iterator->path()))
+		{
+			candidates.push_back(iterator->path());
+		}
 	}
 	if (error) return status_t::failure("Unable to enumerate offline registry config directory", error.value());
 	std::sort(candidates.begin(), candidates.end());
 	for (const auto& candidate : candidates)
 	{
-		auto result = scan_optional_hive_path(image, database, candidate, scanned, progress_state);
+		auto result = scan_optional_hive_path(image, database, writer, candidate, scanned, progress_state);
 		if (!result.ok()) return result;
 	}
 
@@ -455,7 +442,12 @@ status_t scan_all(
 		if (!is_directory) continue;
 
 		candidates.clear();
-		for (std::filesystem::recursive_directory_iterator iterator(root, std::filesystem::directory_options::skip_permission_denied, error); !error && iterator != std::filesystem::recursive_directory_iterator(); iterator.increment(error))
+		for (std::filesystem::recursive_directory_iterator iterator(
+			root,
+			std::filesystem::directory_options::skip_permission_denied,
+			error);
+			!error && iterator != std::filesystem::recursive_directory_iterator();
+			iterator.increment(error))
 		{
 			auto attributes = platform::file_attributes(iterator->path());
 			if (!attributes.ok()) return status_t::failure(attributes.error().message, attributes.error().code);
@@ -466,8 +458,7 @@ status_t scan_all(
 				continue;
 			}
 			std::error_code entry_error;
-			if (iterator->is_regular_file(entry_error) && !entry_error &&
-				is_user_hive_candidate(iterator->path()))
+			if (iterator->is_regular_file(entry_error) && !entry_error && is_user_hive_candidate(iterator->path()))
 			{
 				candidates.push_back(iterator->path());
 			}
@@ -476,11 +467,16 @@ status_t scan_all(
 		std::sort(candidates.begin(), candidates.end());
 		for (const auto& candidate : candidates)
 		{
-			auto result = scan_optional_hive_path(image, database, candidate, scanned, progress_state);
+			auto result = scan_optional_hive_path(image, database, writer, candidate, scanned, progress_state);
 			if (!result.ok()) return result;
 		}
 	}
-	return status_t::success();
+
+	if (progress_state != nullptr)
+	{
+		progress_state->batch(0U, 0U, "building registry indexes");
+	}
+	return writer.finalize();
 }
 
 }
