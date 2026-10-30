@@ -42,6 +42,8 @@ if not exist "%BUILD%" mkdir "%BUILD%"
 if not exist "%BIN%" mkdir "%BIN%"
 
 set "SQLITE_OBJ=%BUILD%\viewer-sqlite3.o"
+set "VIEWER_MARKER=%BIN%\nylon-viewer.semantic-v1"
+if exist "%VIEWER_MARKER%" del /q "%VIEWER_MARKER%" >nul 2>nul
 
 echo [1/2] Compiling SQLite for Nylon Viewer...
 "%CC%" --target=x86_64-w64-mingw32 -O2 -DNDEBUG -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DQS=0 -DSQLITE_DEFAULT_MEMSTATUS=0 -fstack-protector-strong -ffunction-sections -fdata-sections -mguard=cf -c "%SQLITE_DIR%\sqlite3.c" -o "%SQLITE_OBJ%"
@@ -59,6 +61,12 @@ if errorlevel 1 (
 
 if not exist "%BIN%\nylon-viewer.exe" (
     echo error: Viewer build finished without producing nylon-viewer.exe.
+    exit /b 1
+)
+
+>"%VIEWER_MARKER%" echo semantic-progress-v1
+if errorlevel 1 (
+    echo error: Unable to mark semantic-capable viewer build.
     exit /b 1
 )
 
