@@ -42,9 +42,11 @@ if not exist "%BUILD%" mkdir "%BUILD%"
 if not exist "%BIN%" mkdir "%BIN%"
 
 set "SQLITE_OBJ=%BUILD%\viewer-sqlite3.o"
-set "OLD_MARKER=%BIN%\nylon-viewer.semantic-v1"
-set "VIEWER_MARKER=%BIN%\nylon-viewer.atlas-v1"
-if exist "%OLD_MARKER%" del /q "%OLD_MARKER%" >nul 2>nul
+set "OLD_SEMANTIC_MARKER=%BIN%\nylon-viewer.semantic-v1"
+set "OLD_ATLAS_MARKER=%BIN%\nylon-viewer.atlas-v1"
+set "VIEWER_MARKER=%BIN%\nylon-viewer.atlas-v2"
+if exist "%OLD_SEMANTIC_MARKER%" del /q "%OLD_SEMANTIC_MARKER%" >nul 2>nul
+if exist "%OLD_ATLAS_MARKER%" del /q "%OLD_ATLAS_MARKER%" >nul 2>nul
 if exist "%VIEWER_MARKER%" del /q "%VIEWER_MARKER%" >nul 2>nul
 
 echo [1/2] Compiling SQLite for Nylon Viewer...
@@ -55,7 +57,7 @@ if errorlevel 1 (
 )
 
 echo [2/2] Building Nylon Full Atlas Viewer...
-"%CXX%" --target=x86_64-w64-mingw32 -std=c++20 -O2 -DNDEBUG -DUNICODE -D_UNICODE -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_WIN32_WINNT=0x0A00 -Wall -Wextra -Wpedantic -Werror -fstack-protector-strong -ffunction-sections -fdata-sections -mguard=cf -fuse-ld=lld -municode -static -Wl,--gc-sections -Wl,--dynamicbase -Wl,--nxcompat -Wl,--high-entropy-va -I"%SQLITE_DIR%" -include "%ROOT%\viewer\sqlite_prepare.hpp" "%ROOT%\viewer\viewer_atlas.cpp" "%SQLITE_OBJ%" -lws2_32 -lshell32 -o "%BIN%\nylon-viewer.exe"
+"%CXX%" --target=x86_64-w64-mingw32 -std=c++20 -O2 -DNDEBUG -DUNICODE -D_UNICODE -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_WIN32_WINNT=0x0A00 -Wall -Wextra -Wpedantic -Werror -fstack-protector-strong -ffunction-sections -fdata-sections -mguard=cf -fuse-ld=lld -municode -static -Wl,--gc-sections -Wl,--dynamicbase -Wl,--nxcompat -Wl,--high-entropy-va -I"%SQLITE_DIR%" -include "%ROOT%\viewer\sqlite_prepare.hpp" "%ROOT%\viewer\viewer_atlas_v2.cpp" "%SQLITE_OBJ%" -lws2_32 -lshell32 -o "%BIN%\nylon-viewer.exe"
 if errorlevel 1 (
     echo error: Nylon Viewer build failed.
     exit /b 1
@@ -66,7 +68,7 @@ if not exist "%BIN%\nylon-viewer.exe" (
     exit /b 1
 )
 
->"%VIEWER_MARKER%" echo full-atlas-v1
+>"%VIEWER_MARKER%" echo full-atlas-v2-delta-status
 if errorlevel 1 (
     echo error: Unable to mark full-atlas viewer build.
     exit /b 1
