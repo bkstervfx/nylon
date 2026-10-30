@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "../database/database.hpp"
@@ -50,6 +51,22 @@ public:
 		std::uint32_t value_type,
 		std::vector<std::byte> data,
 		std::optional<std::string> text);
+
+	status_t add_value(
+		database::object_id_t key_id,
+		std::uint32_t,
+		std::string name,
+		std::uint32_t value_type,
+		std::vector<std::byte> data,
+		std::optional<std::string> text)
+	{
+		return add_value(
+			key_id,
+			std::move(name),
+			value_type,
+			std::move(data),
+			std::move(text));
+	}
 
 	status_t flush();
 	status_t finalize();
