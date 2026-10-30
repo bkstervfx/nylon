@@ -138,56 +138,129 @@ bool immediate_child_after(std::string_view upper, std::string_view marker, std:
     return true;
 }
 
+bool first_segment_after(std::string_view upper, std::string_view marker, std::string_view* segment_out = nullptr)
+{
+    const std::size_t found = upper.find(marker);
+    if (found == std::string_view::npos) return false;
+    const std::string_view remainder = upper.substr(found + marker.size());
+    if (remainder.empty()) return false;
+    const std::size_t slash = remainder.find('\\');
+    const std::string_view segment = remainder.substr(0, slash);
+    if (segment.empty()) return false;
+    if (segment_out != nullptr) *segment_out = segment;
+    return true;
+}
+
 bool guid_like(std::string_view value)
 {
     return value.size() >= 3U && value.front() == '{' && value.back() == '}';
+}
+
+bool sid_like(std::string_view value)
+{
+    return value.starts_with("S-1-") && value.size() >= 7U;
 }
 
 std::string classify_path(std::string_view path)
 {
     const std::string upper_owned = upper_ascii(std::string(path));
     const std::string_view upper(upper_owned);
-    std::string_view remainder;
+    std::string_view segment;
+
+    // Everything below a service root is service configuration. This avoids
+    // sending Parameters/TriggerInfo/etc. subtrees to the model separately.
+    if (first_segment_after(upper, "\\SERVICES\\", &segment)) return "service";
+
+    constexpr std::string_view clsid_markers[] = {
+        "\\CLASSES\\CLSID\\",
+        "\\CLASSES\\WOW6432NODE\\CLSID\\"
+    };
+    for (const auto marker : clsid_markers)
+        if (first_segment_after(upper, marker, &segment) && guid_like(segment)) return "com_class";
 
     constexpr std::string_view interface_markers[] = {
         "\\CLASSES\\INTERFACE\\",
         "\\CLASSES\\WOW6432NODE\\INTERFACE\\"
     };
     for (const auto marker : interface_markers)
-        if (immediate_child_after(upper, marker, &remainder) && guid_like(remainder)) return "component";
+        if (first_segment_after(upper, marker, &segment) && guid_like(segment)) return "component";
 
     constexpr std::string_view typelib_markers[] = {
         "\\CLASSES\\TYPELIB\\",
         "\\CLASSES\\WOW6432NODE\\TYPELIB\\"
     };
     for (const auto marker : typelib_markers)
-        if (immediate_child_after(upper, marker, &remainder) && guid_like(remainder)) return "component";
+        if (first_segment_after(upper, marker, &segment) && guid_like(segment)) return "component";
 
     constexpr std::string_view appid_markers[] = {
         "\\CLASSES\\APPID\\",
         "\\CLASSES\\WOW6432NODE\\APPID\\"
     };
     for (const auto marker : appid_markers)
-        if (immediate_child_after(upper, marker, &remainder)) return "component";
+        if (first_segment_after(upper, marker, &segment)) return "component";
 
-    if (immediate_child_after(upper, "\\CURRENTVERSION\\UNINSTALL\\", &remainder)) return "application";
-    if (immediate_child_after(upper, "\\TCPIP\\PARAMETERS\\INTERFACES\\", &remainder) && guid_like(remainder)) return "network_configuration";
+    if (first_segment_after(upper, "\\CURRENTVERSION\\UNINSTALL\\", &segment)) return "application";
+    if (first_segment_after(upper, "\\CURRENTVERSION\\APP PATHS\\", &segment)) return "application";
+    if (first_segment_after(upper, "\\CLASSES\\APPLICATIONS\\", &segment)) return "application";
+    if (first_segment_after(upper, "\\CLASSES\\WOW6432NODE\\APPLICATIONS\\", &segment)) return "application";
+    if (first_segment_after(upper, "\\INSTALLER\\PRODUCTS\\", &segment)) return "application";
+    if (first_segment_after(upper, "\\INSTALLER\\COMPONENTS\\", &segment)) return "component";
+    if (first_segment_after(upper, "\\INSTALLER\\FEATURES\\", &segment)) return "component";
+    if (first_segment_after(upper, "\\COMPONENT BASED SERVICING\\PACKAGES\\", &segment)) return "component";
+    if (first_segment_after(upper, "\\COMPONENT BASED SERVICING\\COMPONENTS\\", &segment)) return "component";
 
-    if (upper.ends_with("\\ENVIRONMENT") || upper.find("\\ENVIRONMENT\\") != std::string_view::npos)
+    if (first_segment_after(upper, "\\TCPIP\\PARAMETERS\\INTERFACES\\", &segment) && guid_like(segment)) return "network_configuration";
+    if (upper.find("\\TCPIP\\PARAMETERS\\") != std::string_view::npos ||
+        upper.find("\\TCPIP6\\PARAMETERS\\") != std::string_view::npos ||
+        upper.find("\\NETWORKLIST\\") != std::string_view::npos ||
+        upper.find("\\NETWORKCARDS\\") != std::string_view::npos ||
+        upper.find("\\WINSOCK2\\") != std::string_view::npos)
+        return "network_configuration";
+
+    if (upper.ends_with("\\ENVIRONMENT") || upper.find("\\ENVIRONMENT\\") != std::string_view::npos ||
+        upper.find("\\USER SHELL FOLDERS") != std::string_view::npos || upper.find("\\SHELL FOLDERS") != std::string_view::npos)
         return "environment_setting";
 
-    if (upper.find("\\POLICIES\\") != std::string_view::npos || upper.ends_with("\\POLICIES"))
+    if (upper.find("\\POLICIES\\") != std::string_view::npos || upper.ends_with("\\POLICIES") ||
+        upper.find("\\WINDOWS DEFENDER") != std::string_view::npos ||
+        upper.find("\\FIREWALLPOLICY") != std::string_view::npos ||
+        upper.find("\\CONTROL\\LSA") != std::string_view::npos ||
+        upper.find("\\SAFER\\CODEIDENTIFIERS") != std::string_view::npos ||
+        upper.find("\\APPLOCKER") != std::string_view::npos ||
+        upper.find("\\DEVICEGUARD") != std::string_view::npos)
         return "security_policy";
 
-    if (immediate_child_after(upper, "\\CLASSES\\", &remainder) && remainder.size() > 1U && remainder.front() == '.')
+    if (immediate_child_after(upper, "\\CLASSES\\", &segment) && segment.size() > 1U && segment.front() == '.')
         return "file_association";
+    if (first_segment_after(upper, "\\EXPLORER\\FILEEXTS\\", &segment) && segment.size() > 1U && segment.front() == '.')
+        return "file_association";
+    if (first_segment_after(upper, "\\CLASSES\\MIME\\DATABASE\\CONTENT TYPE\\", &segment))
+        return "file_association";
+
+    if (upper.find("\\SHELLEX\\") != std::string_view::npos) return "shell_extension";
+    if (first_segment_after(upper, "\\CLASSES\\PROTOCOLS\\HANDLER\\", &segment) ||
+        first_segment_after(upper, "\\CLASSES\\PROTOCOLS\\FILTER\\", &segment))
+        return "protocol_handler";
+
+    if (upper.find("\\SYSTEMCERTIFICATES\\") != std::string_view::npos &&
+        upper.find("\\CERTIFICATES\\") != std::string_view::npos)
+        return "certificate";
+
+    if (first_segment_after(upper, "\\PROFILELIST\\", &segment) && sid_like(segment)) return "user";
+
+    if (upper.find("\\ENUM\\") != std::string_view::npos ||
+        upper.find("\\CONTROL\\DEVICECLASSES\\") != std::string_view::npos ||
+        upper.find("\\CONTROL\\CLASS\\") != std::string_view::npos ||
+        upper.find("\\HARDWARE PROFILES\\") != std::string_view::npos)
+        return "device";
 
     return {};
 }
 
-std::string root_path(sqlite3* source, std::int64_t id)
+std::string root_path(statement_t& statement, std::int64_t id)
 {
-    statement_t statement(source, "SELECT path FROM registry_keys WHERE id=?1;");
+    sqlite3_reset(statement.get());
+    sqlite3_clear_bindings(statement.get());
     sqlite3_bind_int64(statement.get(), 1, id);
     if (sqlite3_step(statement.get()) != SQLITE_ROW) return {};
     return text(statement.get(), 0);
@@ -211,6 +284,7 @@ int wmain(int argc, wchar_t** argv)
 
         statement_t jobs(map.get(), "SELECT id,roots FROM lift_jobs WHERE status=0 AND deterministic_kind='' ORDER BY id;");
         statement_t update(map.get(), "UPDATE lift_jobs SET deterministic_kind=?2 WHERE id=?1 AND status=0 AND deterministic_kind='';");
+        statement_t path_lookup(source.get(), "SELECT path FROM registry_keys WHERE id=?1;");
         std::unordered_map<std::string, std::size_t> counts;
         std::size_t classified = 0;
 
@@ -225,7 +299,7 @@ int wmain(int argc, wchar_t** argv)
                 bool valid = !roots.empty();
                 for (const std::int64_t root : roots)
                 {
-                    const std::string kind = classify_path(root_path(source.get(), root));
+                    const std::string kind = classify_path(root_path(path_lookup, root));
                     if (kind.empty())
                     {
                         valid = false;
