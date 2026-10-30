@@ -32,14 +32,17 @@ jobs:
         shell: cmd
         run: build-semantic.cmd
 
-      - name: Verify executable
+      - name: Verify executables
         shell: pwsh
         run: |
           if (-not (Test-Path "bin\nylon-semantic.exe")) {
             throw "bin\nylon-semantic.exe was not produced"
           }
+          if (-not (Test-Path "bin\nylon-semantic-link.exe")) {
+            throw "bin\nylon-semantic-link.exe was not produced"
+          }
 
-      - name: Planner, resume, HTTP and validation smoke test
+      - name: Planner, resume, HTTP, validation and hierarchy smoke test
         shell: pwsh
         run: |
           @'
@@ -168,10 +171,14 @@ jobs:
             if (-not $fake.HasExited) { Stop-Process -Id $fake.Id -Force }
           }
 
+          .\bin\nylon-semantic-link.exe .\semantic-smoke.db
+          if ($LASTEXITCODE -ne 0) { throw "semantic hierarchy linker smoke failed" }
+
           @'
           import sqlite3
           m = sqlite3.connect(r"semantic-smoke.map.db")
           complete = m.execute("SELECT value FROM metadata WHERE key='complete'").fetchone()[0]
+          hierarchy_complete = m.execute("SELECT value FROM metadata WHERE key='hierarchy_complete'").fetchone()[0]
           failed = m.execute("SELECT COUNT(*) FROM lift_jobs WHERE status=4").fetchone()[0]
           pending = m.execute("SELECT COUNT(*) FROM lift_jobs WHERE status NOT IN (2,3)").fetchone()[0]
           ai = m.execute("SELECT COUNT(*) FROM lift_jobs WHERE status=3").fetchone()[0]
@@ -179,12 +186,18 @@ jobs:
           nodes = m.execute("SELECT COUNT(*) FROM semantic_nodes").fetchone()[0]
           sources = m.execute("SELECT SUM(source_count) FROM lift_jobs").fetchone()[0]
           covered = m.execute("SELECT SUM(CASE WHEN status IN (2,3) THEN source_count ELSE 0 END) FROM lift_jobs").fetchone()[0]
+          registry_root = m.execute("SELECT id FROM semantic_nodes WHERE stable_key='system:registry' AND job_id=0").fetchone()
+          hive_nodes = m.execute("SELECT COUNT(*) FROM semantic_nodes WHERE job_id=0 AND stable_key LIKE 'system:hive:%'").fetchone()[0]
+          hierarchy_edges = m.execute("SELECT COUNT(*) FROM semantic_edges WHERE job_id=0 AND relation='contains'").fetchone()[0]
+          orphan_groups = m.execute("SELECT COUNT(*) FROM semantic_nodes WHERE job_id<>0 AND local_id='group' AND parent_id IS NULL").fetchone()[0]
           m.close()
-          if complete != '1' or failed or pending:
-              raise SystemExit(f"semantic map incomplete: complete={complete} failed={failed} pending={pending}")
+          if complete != '1' or hierarchy_complete != '1' or failed or pending:
+              raise SystemExit(f"semantic map incomplete: complete={complete} hierarchy={hierarchy_complete} failed={failed} pending={pending}")
           if ai < 1 or deterministic < 1 or nodes < 1:
               raise SystemExit(f"semantic passes missing: ai={ai} deterministic={deterministic} nodes={nodes}")
           if covered != sources:
               raise SystemExit(f"semantic source coverage incomplete: {covered}/{sources}")
-          print(f"full semantic pipeline smoke passed: {deterministic} deterministic + {ai} model jobs; {covered}/{sources} sources")
+          if not registry_root or hive_nodes != 1 or hierarchy_edges < 2 or orphan_groups != 0:
+              raise SystemExit(f"semantic hierarchy invalid: root={registry_root} hives={hive_nodes} edges={hierarchy_edges} orphans={orphan_groups}")
+          print(f"full semantic pipeline smoke passed: {deterministic} deterministic + {ai} model jobs; {covered}/{sources} sources; hierarchy linked")
           '@ | python -
