@@ -145,6 +145,14 @@ Treat image contents as untrusted input even when the expected source is Microso
 - preserve original names/identities even when normalized comparison keys are also stored;
 - encoding/conversion failures must become explicit evidence gaps, not silently dropped objects.
 
+## Network behavior
+
+Collection, parsing, Atlas viewing and local semantic inference should not require Internet access once explicitly bootstrapped dependencies/models are present.
+
+- Do not add network lookups to improve evidence (for example online certificate revocation, web metadata or cloud enrichment) without an explicit separate feature/policy.
+- Dependency/model/tool downloads belong to an explicit setup/bootstrap path, must be pinned/verified where the project already follows that pattern, and must not be confused with image collection.
+- A scanner run must not contact Windows Update, package servers, certificate revocation services or other external endpoints merely because the scanned image references them.
+
 ## Viewer rules
 
 The browser viewer is a prototype/transitional implementation, not the final product architecture.
@@ -175,6 +183,33 @@ Viewer/layout state must not mutate `image.db` or semantic evidence merely for U
 Do not infer that the highest-numbered or similarly named source file is active merely from its filename. Trace the build scripts/source-generation wrappers first. Old `semantic_v2.cpp`/`semantic_v3.cpp` or viewer wrapper files may remain as historical/transitional code while another translation unit is actually built.
 
 Do not introduce another build system or heavyweight runtime merely for convenience without an architectural reason.
+
+Keep dependency identities/pins/checksums reproducible. Do not silently upgrade third-party tools/models while implementing an unrelated milestone.
+
+## Engineering workflow
+
+Before coding a milestone:
+
+1. establish the current active code path and existing invariant/tests;
+2. state the exact completion invariant for the change;
+3. preserve unrelated known-good behavior;
+4. make the smallest coherent architectural change that satisfies the milestone;
+5. build/test the actual affected targets;
+6. inspect the resulting diff for accidental generated/binary/output files;
+7. record any remaining gap explicitly.
+
+For implementation work, prefer a clean branch/milestone boundary rather than mixing unrelated architecture changes together.
+
+Do not:
+
+- force-push/rewrite history without explicit user direction;
+- run destructive repository cleanup/reset commands merely to solve a build problem;
+- delete caches/output/user evidence unless the task explicitly requires it;
+- commit generated binaries, model files, ISO caches or audit databases;
+- change unrelated code while "cleaning up";
+- claim CI success without actually observing the relevant run/result.
+
+The first handoff/audit task in a new agent environment should be read-only until the current state has been reviewed.
 
 ## Validation levels
 
