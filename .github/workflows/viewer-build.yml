@@ -41,3 +41,72 @@ jobs:
             throw "nylon-viewer.exe is unexpectedly small: $size bytes"
           }
           Write-Host "nylon-viewer.exe size: $size bytes"
+
+      - name: Smoke-test read-only viewer API
+        shell: pwsh
+        run: |
+          @'
+          import sqlite3
+          db = sqlite3.connect(r"viewer-smoke.db")
+          db.executescript("""
+          CREATE TABLE metadata(meta_key TEXT PRIMARY KEY, value TEXT NOT NULL);
+          CREATE TABLE registry_hives(id INTEGER PRIMARY KEY, name TEXT NOT NULL, source_path TEXT NOT NULL, required INTEGER NOT NULL);
+          CREATE TABLE registry_keys(id INTEGER PRIMARY KEY, hive_id INTEGER NOT NULL, parent_id INTEGER, cell_offset INTEGER NOT NULL, name TEXT NOT NULL, path TEXT NOT NULL);
+          CREATE TABLE registry_values(id INTEGER PRIMARY KEY, key_id INTEGER NOT NULL, name TEXT NOT NULL, value_type INTEGER NOT NULL, data BLOB NOT NULL, text_value TEXT);
+          CREATE INDEX registry_key_parent_index ON registry_keys(parent_id);
+          CREATE INDEX registry_value_key_index ON registry_values(key_id);
+          INSERT INTO metadata VALUES('schema_version','2');
+          INSERT INTO metadata VALUES('source_image_name','Viewer smoke image');
+          INSERT INTO metadata VALUES('source_kind','test');
+          INSERT INTO registry_hives VALUES(1,'SOFTWARE','Windows\\System32\\config\\SOFTWARE',1);
+          INSERT INTO registry_keys VALUES(1,1,NULL,32,'ROOT','SOFTWARE');
+          INSERT INTO registry_keys VALUES(2,1,1,64,'NylonSmoke','SOFTWARE\\NylonSmoke');
+          INSERT INTO registry_values VALUES(1,2,'Greeting',1,X'680065006C006C006F000000','hello');
+          INSERT INTO registry_values VALUES(2,2,'Number',4,X'2A000000','42');
+          """)
+          db.commit()
+          db.close()
+          '@ | python -
+
+          $process = Start-Process -FilePath ".\bin\nylon-viewer.exe" -ArgumentList ".\viewer-smoke.db" -PassThru
+          try {
+            $port = $null
+            for ($i = 0; $i -lt 40; $i++) {
+              Start-Sleep -Milliseconds 250
+              $listener = Get-NetTCPConnection -State Listen -OwningProcess $process.Id -ErrorAction SilentlyContinue | Where-Object { $_.LocalAddress -eq '127.0.0.1' } | Select-Object -First 1
+              if ($listener) {
+                $port = $listener.LocalPort
+                break
+              }
+              if ($process.HasExited) {
+                throw "viewer exited before opening its local server (exit $($process.ExitCode))"
+              }
+            }
+            if (-not $port) { throw "viewer did not open a localhost listener" }
+
+            $base = "http://127.0.0.1:$port"
+            $info = Invoke-RestMethod "$base/api/info"
+            if ($info.schema -ne '2' -or $info.keys -ne 2 -or $info.values -ne 2) {
+              throw "unexpected /api/info response"
+            }
+            $hives = Invoke-RestMethod "$base/api/hives"
+            if ($hives.Count -ne 1 -or $hives[0].name -ne 'SOFTWARE') {
+              throw "unexpected /api/hives response"
+            }
+            $search = @(Invoke-RestMethod "$base/api/search?q=NylonSmoke")
+            if ($search.Count -lt 1 -or $search[0].id -ne 'rk:2') {
+              throw "viewer search did not return the smoke key"
+            }
+            $graph = Invoke-RestMethod "$base/api/neighborhood?id=rk%3A2&values=1"
+            if ($graph.nodes.Count -lt 3) {
+              throw "viewer neighborhood did not include expected nodes"
+            }
+            $node = Invoke-RestMethod "$base/api/node?id=rv%3A1"
+            if ($node.typeName -ne 'REG_SZ' -or $node.text -ne 'hello') {
+              throw "viewer node details were incorrect"
+            }
+            Write-Host "Viewer API smoke test passed on localhost:$port"
+          }
+          finally {
+            if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+          }
