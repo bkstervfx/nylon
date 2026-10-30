@@ -6,10 +6,12 @@ set "ROOT=%CD%"
 set "DB=%~1"
 if "%DB%"=="" set "DB=%ROOT%\output\image.db"
 set "SEMANTIC=%ROOT%\bin\nylon-semantic.exe"
+set "CLASSIFIER=%ROOT%\bin\nylon-semantic-classify.exe"
 set "LINKER=%ROOT%\bin\nylon-semantic-link.exe"
 set "VIEWER=%ROOT%\bin\nylon-viewer.exe"
 
 if not exist "%SEMANTIC%" goto build_semantic
+if not exist "%CLASSIFIER%" goto build_semantic
 if not exist "%LINKER%" goto build_semantic
 goto semantic_built
 
@@ -25,9 +27,16 @@ if not exist "%VIEWER%" (
     if errorlevel 1 exit /b 1
 )
 
-rem Build the exact work map first so the browser can visualize real progress immediately.
+rem Build the exact work map, then classify high-volume Windows namespaces
+rem deterministically before any model/runtime setup is required.
 "%SEMANTIC%" "%DB%" --plan-only
 if errorlevel 1 exit /b 1
+"%CLASSIFIER%" "%DB%"
+if errorlevel 1 exit /b 1
+
+rem Open the progress field immediately. The full semantic pass below will first
+rem commit the newly preclassified units, then dispatch only the remaining work
+rem to the local GPU model.
 start "Nylon Viewer" "%VIEWER%" "%DB%"
 
 if "%LOCALAPPDATA%"=="" (
