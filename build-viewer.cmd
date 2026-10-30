@@ -51,7 +51,7 @@ if errorlevel 1 (
 )
 
 echo [2/2] Building Nylon Viewer...
-"%CXX%" --target=x86_64-w64-mingw32 -std=c++20 -O2 -DNDEBUG -DUNICODE -D_UNICODE -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_WIN32_WINNT=0x0A00 -Wall -Wextra -Wpedantic -Werror -fstack-protector-strong -ffunction-sections -fdata-sections -mguard=cf -fuse-ld=lld -municode -static -Wl,--gc-sections -Wl,--dynamicbase -Wl,--nxcompat -Wl,--high-entropy-va -I"%SQLITE_DIR%" -include "%ROOT%\viewer\sqlite_prepare.hpp" "%ROOT%\viewer\viewer_optimized.cpp" "%SQLITE_OBJ%" -lws2_32 -lshell32 -o "%BIN%\nylon-viewer.exe"
+"%CXX%" --target=x86_64-w64-mingw32 -std=c++20 -O2 -DNDEBUG -DUNICODE -D_UNICODE -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_WIN32_WINNT=0x0A00 -Wall -Wextra -Wpedantic -Werror -fstack-protector-strong -ffunction-sections -fdata-sections -mguard=cf -fuse-ld=lld -municode -static -Wl,--gc-sections -Wl,--dynamicbase -Wl,--nxcompat -Wl,--high-entropy-va -I"%SQLITE_DIR%" -include "%ROOT%\viewer\sqlite_prepare.hpp" "%ROOT%\viewer\viewer_semantic.cpp" "%SQLITE_OBJ%" -lws2_32 -lshell32 -o "%BIN%\nylon-viewer.exe"
 if errorlevel 1 (
     echo error: Nylon Viewer build failed.
     exit /b 1
