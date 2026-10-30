@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
-#include <set>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -140,7 +139,7 @@ result_t<hive_t> hive_t::open(const std::filesystem::path& path)
 	}
 
 	std::vector<impl_t::hbin_range_t> hbins;
-	std::set<std::uint32_t> cell_offsets;
+	std::vector<std::uint32_t> cell_offsets;
 	std::size_t cell_count = 0;
 	std::size_t relative = 0;
 	while (relative < data_size.value())
@@ -184,10 +183,8 @@ result_t<hive_t> hive_t::open(const std::filesystem::path& path)
 			{
 				return result_t<hive_t>::failure("Registry hbin cell crosses its bin boundary", ERROR_BADDB);
 			}
-			if (!cell_offsets.insert(static_cast<std::uint32_t>(cell_relative)).second)
-			{
-				return result_t<hive_t>::failure("Registry hive contains duplicate cell boundaries", ERROR_BADDB);
-			}
+
+			cell_offsets.push_back(static_cast<std::uint32_t>(cell_relative));
 			++cell_count;
 			cell_relative += cell_size;
 		}
