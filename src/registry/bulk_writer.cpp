@@ -29,7 +29,8 @@ status_t sqlite_failure(sqlite3* database, std::string context, int code)
 status_t execute(sqlite3* database, std::string_view sql)
 {
 	char* error = nullptr;
-	const int rc = sqlite3_exec(database, std::string(sql).c_str(), nullptr, nullptr, &error);
+	const std::string text(sql);
+	const int rc = sqlite3_exec(database, text.c_str(), nullptr, nullptr, &error);
 	if (rc == SQLITE_OK)
 	{
 		return status_t::success();
@@ -103,7 +104,11 @@ status_t bind_text(sqlite3* database, sqlite3_stmt* statement, int index, std::s
 	return status_t::success();
 }
 
-std::string insert_sql(std::string_view table, std::string_view columns, std::size_t column_count, std::size_t rows)
+std::string insert_sql(
+	std::string_view table,
+	std::string_view columns,
+	std::size_t column_count,
+	std::size_t rows)
 {
 	std::string sql;
 	sql.reserve(96U + rows * (column_count * 2U + 4U));
@@ -145,7 +150,6 @@ struct bulk_writer_t::impl_t
 	{
 		database::object_id_t id = 0;
 		database::object_id_t key_id = 0;
-		std::uint32_t cell_offset = 0;
 		std::string name;
 		std::uint32_t value_type = 0;
 		std::vector<std::byte> data;
@@ -174,8 +178,6 @@ struct bulk_writer_t::impl_t
 		if (full_batch)
 		{
 			statement = key_batch_insert.get();
-			auto status = reset_statement(statement);
-			if (!status.ok()) return status;
 		}
 		else
 		{
@@ -237,8 +239,6 @@ struct bulk_writer_t::impl_t
 		if (full_batch)
 		{
 			statement = value_batch_insert.get();
-			auto status = reset_statement(statement);
-			if (!status.ok()) return status;
 		}
 		else
 		{
@@ -246,8 +246,8 @@ struct bulk_writer_t::impl_t
 				database,
 				insert_sql(
 					"registry_values",
-					"id,key_id,cell_offset,name,value_type,data,text_value",
-					7U,
+					"id,key_id,name,value_type,data,text_value",
+					6U,
 					values.size()));
 			if (!prepared.ok())
 			{
@@ -267,7 +267,6 @@ struct bulk_writer_t::impl_t
 
 			int rc = sqlite3_bind_int64(statement, parameter++, row.id);
 			if (rc == SQLITE_OK) rc = sqlite3_bind_int64(statement, parameter++, row.key_id);
-			if (rc == SQLITE_OK) rc = sqlite3_bind_int64(statement, parameter++, row.cell_offset);
 			if (rc != SQLITE_OK) return sqlite_failure(database, "Unable to bind registry value row", rc);
 
 			auto status = bind_text(database, statement, parameter++, row.name);
@@ -350,7 +349,6 @@ CREATE TABLE IF NOT EXISTS registry_keys (
 CREATE TABLE IF NOT EXISTS registry_values (
 	id INTEGER PRIMARY KEY,
 	key_id INTEGER NOT NULL,
-	cell_offset INTEGER NOT NULL,
 	name TEXT NOT NULL,
 	value_type INTEGER NOT NULL,
 	data BLOB NOT NULL,
@@ -395,8 +393,8 @@ CREATE TABLE IF NOT EXISTS registry_values (
 		handle,
 		insert_sql(
 			"registry_values",
-			"id,key_id,cell_offset,name,value_type,data,text_value",
-			7U,
+			"id,key_id,name,value_type,data,text_value",
+			6U,
 			batch_rows));
 	if (!value_statement.ok())
 	{
@@ -418,18 +416,25 @@ result_t<database::object_id_t> bulk_writer_t::add_hive(
 	}
 
 	sqlite3_stmt* statement = impl_->hive_insert.get();
-	auto status = reset_statement(statement);
-	if (!status.ok()) return result_t<database::object_id_t>::failure(status.error().message, status.error().code);
-
 	const database::object_id_t id = impl_->next_hive_id++;
 	int rc = sqlite3_bind_int64(statement, 1, id);
-	if (rc != SQLITE_OK) return result_t<database::object_id_t>::failure("Unable to bind registry hive id", static_cast<std::uint32_t>(rc));
-	status = bind_text(impl_->database, statement, 2, name);
+	if (rc != SQLITE_OK)
+	{
+		return result_t<database::object_id_t>::failure(
+			"Unable to bind registry hive id",
+			static_cast<std::uint32_t>(rc));
+	}
+	auto status = bind_text(impl_->database, statement, 2, name);
 	if (!status.ok()) return result_t<database::object_id_t>::failure(status.error().message, status.error().code);
 	status = bind_text(impl_->database, statement, 3, source_path);
 	if (!status.ok()) return result_t<database::object_id_t>::failure(status.error().message, status.error().code);
 	rc = sqlite3_bind_int(statement, 4, required ? 1 : 0);
-	if (rc != SQLITE_OK) return result_t<database::object_id_t>::failure("Unable to bind registry hive requirement", static_cast<std::uint32_t>(rc));
+	if (rc != SQLITE_OK)
+	{
+		return result_t<database::object_id_t>::failure(
+			"Unable to bind registry hive requirement",
+			static_cast<std::uint32_t>(rc));
+	}
 	rc = sqlite3_step(statement);
 	if (rc != SQLITE_DONE)
 	{
@@ -468,7 +473,6 @@ status_t bulk_writer_t::add_key(
 
 status_t bulk_writer_t::add_value(
 	database::object_id_t key_id,
-	std::uint32_t cell_offset,
 	std::string name,
 	std::uint32_t value_type,
 	std::vector<std::byte> data,
@@ -479,16 +483,15 @@ status_t bulk_writer_t::add_value(
 	{
 		return status_t::failure("Registry value exceeds SQLite blob size limit");
 	}
-
 	if (impl_->pending_blob_bytes > std::numeric_limits<std::size_t>::max() - data.size())
 	{
 		return status_t::failure("Registry bulk buffer size overflow");
 	}
+
 	impl_->pending_blob_bytes += data.size();
 	impl_->values.push_back(impl_t::value_row_t{
 		impl_->next_value_id++,
 		key_id,
-		cell_offset,
 		std::move(name),
 		value_type,
 		std::move(data),
@@ -531,7 +534,6 @@ CREATE VIEW IF NOT EXISTS registry_value_view AS
 SELECT
 	v.id,
 	v.key_id,
-	v.cell_offset,
 	CASE WHEN v.name='' THEN '(Default)' ELSE v.name END AS name,
 	k.path || '::' || v.name AS path,
 	v.value_type,
