@@ -87,6 +87,7 @@ database_t::~database_t()
 database_t::database_t(database_t&& other) noexcept
 	: database_(std::exchange(other.database_, nullptr)),
 	  object_upsert_(std::move(other.object_upsert_)),
+	  object_insert_(std::move(other.object_insert_)),
 	  property_insert_(std::move(other.property_insert_)),
 	  edge_insert_(std::move(other.edge_insert_)),
 	  file_metadata_upsert_(std::move(other.file_metadata_upsert_)),
@@ -104,6 +105,7 @@ database_t& database_t::operator=(database_t&& other) noexcept
 		reset();
 		database_ = std::exchange(other.database_, nullptr);
 		object_upsert_ = std::move(other.object_upsert_);
+		object_insert_ = std::move(other.object_insert_);
 		property_insert_ = std::move(other.property_insert_);
 		edge_insert_ = std::move(other.edge_insert_);
 		file_metadata_upsert_ = std::move(other.file_metadata_upsert_);
@@ -124,6 +126,7 @@ void database_t::reset() noexcept
 	file_metadata_upsert_.reset();
 	edge_insert_.reset();
 	property_insert_.reset();
+	object_insert_.reset();
 	object_upsert_.reset();
 
 	in_transaction_ = false;
@@ -291,7 +294,11 @@ status_t database_t::prepare_cached_statements()
 		"path=CASE WHEN excluded.path<>'' THEN excluded.path ELSE objects.path END, "
 		"parent_id=COALESCE(objects.parent_id, excluded.parent_id) "
 		"RETURNING id;");
+	if (!status.ok()) return status;
 
+	status = assign(
+		object_insert_,
+		"INSERT INTO objects(kind, object_key, name, path, parent_id) VALUES(?1, ?2, ?3, ?4, ?5);");
 	if (!status.ok()) return status;
 
 	status = assign(
@@ -460,6 +467,59 @@ result_t<object_id_t> database_t::object(
 		return result_t<object_id_t>::failure(status.error().message, status.error().code);
 	}
 
+	return result_t<object_id_t>::success(id);
+}
+
+result_t<object_id_t> database_t::insert_object(
+	std::string_view kind,
+	std::string_view key,
+	std::string_view name,
+	std::string_view path,
+	std::optional<object_id_t> parent)
+{
+	auto status = reset_statement(object_insert_.get());
+	if (!status.ok())
+	{
+		return result_t<object_id_t>::failure(status.error().message, status.error().code);
+	}
+
+	const std::pair<int, std::string_view> text_values[] = {
+		{ 1, kind }, { 2, key }, { 3, name }, { 4, path }
+	};
+	for (const auto& [index, value] : text_values)
+	{
+		status = bind_text(object_insert_.get(), index, value);
+		if (!status.ok())
+		{
+			reset_statement(object_insert_.get());
+			return result_t<object_id_t>::failure(status.error().message, status.error().code);
+		}
+	}
+
+	int rc = parent.has_value()
+		? sqlite3_bind_int64(object_insert_.get(), 5, *parent)
+		: sqlite3_bind_null(object_insert_.get(), 5);
+	if (rc != SQLITE_OK)
+	{
+		const auto failure = sqlite_failure(database_, "sqlite3_bind parent failed", rc);
+		reset_statement(object_insert_.get());
+		return result_t<object_id_t>::failure(failure.error().message, failure.error().code);
+	}
+
+	rc = sqlite3_step(object_insert_.get());
+	if (rc != SQLITE_DONE)
+	{
+		const auto failure = sqlite_failure(database_, "Object insert did not complete", rc);
+		reset_statement(object_insert_.get());
+		return result_t<object_id_t>::failure(failure.error().message, failure.error().code);
+	}
+
+	const object_id_t id = sqlite3_last_insert_rowid(database_);
+	status = reset_statement(object_insert_.get());
+	if (!status.ok())
+	{
+		return result_t<object_id_t>::failure(status.error().message, status.error().code);
+	}
 	return result_t<object_id_t>::success(id);
 }
 
