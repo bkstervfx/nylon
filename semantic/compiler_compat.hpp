@@ -1,6 +1,8 @@
 #ifndef NYLON_SEMANTIC_COMPILER_COMPAT_HPP
 #define NYLON_SEMANTIC_COMPILER_COMPAT_HPP
 
+#include <sqlite3.h>
+
 #include <array>
 #include <cctype>
 #include <concepts>
@@ -49,5 +51,22 @@ inline std::ostream& operator<<(std::ostream& stream, T value)
     if (negative) *--cursor = '-';
     return stream.write(cursor, static_cast<std::streamsize>((digits + sizeof(digits)) - cursor));
 }
+
+// An empty std::string_view is allowed to expose a null data pointer. SQLite
+// interprets a null text pointer as SQL NULL even when byte_count is zero.
+// Nylon's semantic schema uses empty TEXT intentionally, so normalize that
+// boundary once for every semantic sqlite3_bind_text call.
+inline int nylon_semantic_bind_text(
+    sqlite3_stmt* statement,
+    int index,
+    const char* text,
+    int byte_count,
+    sqlite3_destructor_type destructor)
+{
+    if (text == nullptr && byte_count == 0) text = "";
+    return sqlite3_bind_text(statement, index, text, byte_count, destructor);
+}
+
+#define sqlite3_bind_text nylon_semantic_bind_text
 
 #endif
