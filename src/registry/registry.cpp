@@ -125,7 +125,7 @@ status_t record_hive_error(
 	bool required,
 	const error_t& error)
 {
-	auto error_object = database.object(
+	auto error_object = database.insert_object(
 		"audit_error",
 		std::string("registry:") + std::string(hive_name),
 		std::string(hive_name));
@@ -165,7 +165,7 @@ status_t scan_hive(
 	if (progress_state != nullptr) progress_state->hive(hive_name);
 
 	auto hive = std::move(hive_result).value();
-	auto hive_object = database.object("registry_hive", std::string(hive_name), std::string(hive_name));
+	auto hive_object = database.insert_object("registry_hive", std::string(hive_name), std::string(hive_name));
 	if (!hive_object.ok()) return status_t::failure(hive_object.error().message, hive_object.error().code);
 
 	std::uint64_t unpublished_keys = 0U;
@@ -198,7 +198,7 @@ status_t scan_hive(
 			display_name = current_utf8.value().substr(
 				separator == std::string::npos ? 0U : separator + 1U);
 		}
-		auto key_object = database.object("registry_key", object_key, display_name, display_path, current.parent);
+		auto key_object = database.insert_object("registry_key", object_key, display_name, display_path, current.parent);
 		if (!key_object.ok()) return status_t::failure(key_object.error().message, key_object.error().code);
 
 		auto values_result = hive.values(current.path);
@@ -222,7 +222,7 @@ status_t scan_hive(
 			value_path.append(display_path);
 			value_path.append("::");
 			value_path.append(value_name.value());
-			auto value_object = database.object(
+			auto value_object = database.insert_object(
 				"registry_value",
 				value_key,
 				value_name.value().empty() ? "(Default)" : value_name.value(),
