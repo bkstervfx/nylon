@@ -2,6 +2,8 @@
 
 Nylon is a read-only C++20 auditor for offline Windows images.
 
+> **Current behavior vs product target:** this README primarily documents commands and behavior that exist today. The canonical long-term product goal and architecture are defined in `docs/PRODUCT_GOAL.md` and `docs/ARCHITECTURE.md`; agent guardrails are in `AGENTS.md`. Do not infer that target collectors/native Atlas are already implemented from those documents, and do not infer that the current registry/browser vertical slice is the final product architecture.
+
 Current implementation covers the project foundation, direct binary registry-hive auditing and portable Windows ISO preparation.
 
 ## Build
@@ -55,9 +57,11 @@ semantic.cmd D:\audits\image.db
 
 The first run creates/resumes `image.map.db`, opens the local browser viewer immediately, and then installs the pinned local inference runtime/model only when they are not already cached. The model and runtime live under `%LOCALAPPDATA%\Temp\nylon\tools\semantic\` and are reused on later runs.
 
-The source `image.db` is never modified. `image.map.db` is a derived, reproducible semantic representation and records exact source references back to the audit evidence. Work is partitioned into bounded units, validated before commit, and resumable. Known Windows structures are normalized deterministically where possible; the local model is used for bounded semantic lifting rather than whole-image chat or threat scoring.
+The source `image.db` is never modified. `image.map.db` is a derived, reproducible semantic representation and records source references back to the audit evidence. Work is partitioned into bounded units, validated before commit, and resumable. Known Windows structures are normalized deterministically where possible; the local model is used for bounded semantic lifting rather than whole-image chat or threat scoring.
 
-In the viewer, choose **Semantic** to see the mapping pass as a dense work field. Each square is a real semantic work unit:
+The current semantic pipeline is registry-focused. Its source-accounting invariant covers imported registry keys/values; that must not be described as full Windows-image semantic coverage.
+
+In the current viewer, choose **Progress** to see the mapping pass as a dense work field. Each square is a semantic work unit:
 
 ```text
 gray   pending
@@ -66,19 +70,21 @@ green  validated and committed
 red    failed
 ```
 
-Hovering a square shows the exact registry branch and source-object count. Clicking it opens the committed semantic output or the actual failure details. The percentage is calculated from raw registry keys/values owned by completed work units, so it represents source coverage rather than an estimated animation.
+Hovering a square shows the registry branch and source-object count. Clicking it opens the committed semantic output or failure details. The percentage is calculated from raw registry keys/values owned by completed work units, so it represents current registry-source accounting rather than estimated animation or whole-image completion.
 
 The initial local configuration is pinned to Qwen3.5-4B Q8_0 through llama.cpp Vulkan with four parallel inference slots. `semantic/model.manifest` records the model/runtime identities and semantic schema versions.
 
 ## Viewer
 
-Open the raw audit viewer without running the semantic pass with:
+Open the current raw/semantic viewer without running the semantic pass with:
 
 ```cmd
 view.cmd
 ```
 
-The viewer and semantic progress UI are served only on `127.0.0.1`. The audit database is opened read-only.
+The current viewer is a **transitional browser-based implementation**. It is useful for the existing registry/semantic vertical slice, but the canonical final Atlas architecture is the native Win32 + D3D11 + Direct2D + DirectWrite design in `docs/ARCHITECTURE.md`.
+
+The current viewer and semantic progress UI are served only on `127.0.0.1`. The audit database is opened read-only.
 
 ## ISO handling and persistent cache
 
@@ -89,6 +95,8 @@ Nylon does not mount the ISO and does not use DISM or WIMGAPI mounting. It extra
 ```
 
 This intentionally avoids carrying Windows security descriptors, TrustedInstaller ownership and file attributes from the Windows image into Nylon's working copy.
+
+Accordingly, the expanded cache is an immutable **working payload view**, not a lossless source for every original filesystem metadata field. Future whole-image collectors that need ACL/security-descriptor, original-attribute or other transformed source metadata must obtain it from an authoritative source representation or mark it unavailable/unsupported; they must not infer it from the prepared cache.
 
 For an ISO input, Nylon holds a read/share lock on the source while it is being hashed and prepared. The ISO is streamed through SHA-256, and final expanded image caches are keyed by that SHA-256 plus the selected image index. They are stored outside the repository under:
 
