@@ -1,0 +1,98 @@
+name: semantic-build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "semantic/**"
+      - "semantic.cmd"
+      - "semantic-setup.cmd"
+      - "build-semantic.cmd"
+      - ".github/workflows/semantic-build.yml"
+  pull_request:
+    paths:
+      - "semantic/**"
+      - "semantic.cmd"
+      - "semantic-setup.cmd"
+      - "build-semantic.cmd"
+      - ".github/workflows/semantic-build.yml"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Nylon portable toolchain
+        shell: cmd
+        run: build.cmd
+
+      - name: Build semantic lifter
+        shell: cmd
+        run: build-semantic.cmd
+
+      - name: Verify executable
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "bin\nylon-semantic.exe")) {
+            throw "bin\nylon-semantic.exe was not produced"
+          }
+
+      - name: Planner and coverage smoke test
+        shell: pwsh
+        run: |
+          @'
+          import sqlite3
+          db = sqlite3.connect(r"semantic-smoke.db")
+          db.executescript("""
+          CREATE TABLE metadata(meta_key TEXT PRIMARY KEY, value TEXT NOT NULL);
+          CREATE TABLE registry_hives(id INTEGER PRIMARY KEY, name TEXT NOT NULL, source_path TEXT NOT NULL, required INTEGER NOT NULL);
+          CREATE TABLE registry_keys(id INTEGER PRIMARY KEY, hive_id INTEGER NOT NULL, parent_id INTEGER, cell_offset INTEGER NOT NULL, name TEXT NOT NULL, path TEXT NOT NULL);
+          CREATE TABLE registry_values(id INTEGER PRIMARY KEY, key_id INTEGER NOT NULL, name TEXT NOT NULL, value_type INTEGER NOT NULL, data BLOB NOT NULL, text_value TEXT);
+          CREATE INDEX registry_key_parent_index ON registry_keys(parent_id);
+          CREATE INDEX registry_value_key_index ON registry_values(key_id);
+          INSERT INTO metadata VALUES('schema_version','2');
+          INSERT INTO metadata VALUES('source_image_name','Semantic smoke image');
+          INSERT INTO metadata VALUES('source_kind','test');
+          INSERT INTO registry_hives VALUES(1,'SYSTEM','Windows\\System32\\config\\SYSTEM',1);
+          INSERT INTO registry_keys VALUES(1,1,NULL,32,'SYSTEM','SYSTEM');
+          INSERT INTO registry_keys VALUES(2,1,1,64,'ControlSet001','SYSTEM\\ControlSet001');
+          INSERT INTO registry_keys VALUES(3,1,2,96,'Services','SYSTEM\\ControlSet001\\Services');
+          """)
+          key_id = 4
+          value_id = 1
+          for i in range(48):
+              name = f"Svc{i:03d}"
+              path = f"SYSTEM\\ControlSet001\\Services\\{name}"
+              db.execute("INSERT INTO registry_keys VALUES(?,?,?,?,?,?)", (key_id,1,3,128+key_id,name,path))
+              for field, value in [("Start","2"),("Type","16"),("ImagePath",f"C:\\Windows\\System32\\{name}.exe")]:
+                  db.execute("INSERT INTO registry_values VALUES(?,?,?,?,?,?)", (value_id,key_id,field,1,b"x",value))
+                  value_id += 1
+              key_id += 1
+          db.commit()
+          db.close()
+          '@ | python -
+
+          .\bin\nylon-semantic.exe .\semantic-smoke.db --plan-only
+          if ($LASTEXITCODE -ne 0) { throw "semantic planner smoke failed" }
+
+          @'
+          import sqlite3
+          src = sqlite3.connect(r"semantic-smoke.db")
+          expected = src.execute("SELECT (SELECT COUNT(*) FROM registry_keys)+(SELECT COUNT(*) FROM registry_values)").fetchone()[0]
+          src.close()
+          m = sqlite3.connect(r"semantic-smoke.map.db")
+          planned = m.execute("SELECT SUM(source_count) FROM lift_jobs").fetchone()[0]
+          jobs = m.execute("SELECT COUNT(*) FROM lift_jobs").fetchone()[0]
+          deterministic = m.execute("SELECT COUNT(*) FROM lift_jobs WHERE status=2").fetchone()[0]
+          model = m.execute("SELECT value FROM metadata WHERE key='model_name'").fetchone()[0]
+          m.close()
+          if planned != expected:
+              raise SystemExit(f"coverage mismatch: planned={planned} expected={expected}")
+          if jobs < 1 or deterministic < 1:
+              raise SystemExit(f"unexpected planner output: jobs={jobs} deterministic={deterministic}")
+          if model != 'Qwen3.5-4B-Q8_0':
+              raise SystemExit(f"unexpected pinned model {model}")
+          print(f"semantic planner smoke passed: {jobs} jobs, {planned} sources")
+          '@ | python -
