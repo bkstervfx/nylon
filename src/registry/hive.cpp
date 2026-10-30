@@ -138,8 +138,11 @@ result_t<hive_t> hive_t::open(const std::filesystem::path& path)
 		return result_t<hive_t>::failure("Registry hive data region is invalid", ERROR_BADDB);
 	}
 
-	std::vector<impl_t::hbin_range_t> hbins;
-	std::vector<std::uint32_t> cell_offsets;
+	const std::size_t aligned_slots = static_cast<std::size_t>(data_size.value()) >> 3U;
+	std::vector<std::uint64_t> cell_start_bits((aligned_slots + 63U) / 64U, 0U);
+	std::vector<std::uint32_t> hbin_end_by_page(
+		static_cast<std::size_t>(data_size.value()) / detail::hbin_alignment,
+		0U);
 	std::size_t cell_count = 0;
 	std::size_t relative = 0;
 	while (relative < data_size.value())
@@ -166,6 +169,13 @@ result_t<hive_t> hive_t::open(const std::filesystem::path& path)
 		}
 
 		const std::size_t bin_end = relative + bin_size.value();
+		const std::size_t first_page = relative / detail::hbin_alignment;
+		const std::size_t page_count = static_cast<std::size_t>(bin_size.value()) / detail::hbin_alignment;
+		for (std::size_t page = 0; page < page_count; ++page)
+		{
+			hbin_end_by_page[first_page + page] = static_cast<std::uint32_t>(bin_end);
+		}
+
 		std::size_t cell_relative = relative + detail::hbin_header_size;
 		while (cell_relative < bin_end)
 		{
@@ -184,7 +194,14 @@ result_t<hive_t> hive_t::open(const std::filesystem::path& path)
 				return result_t<hive_t>::failure("Registry hbin cell crosses its bin boundary", ERROR_BADDB);
 			}
 
-			cell_offsets.push_back(static_cast<std::uint32_t>(cell_relative));
+			const std::size_t slot = cell_relative >> 3U;
+			const std::size_t word = slot >> 6U;
+			const std::uint64_t mask = std::uint64_t{ 1 } << (slot & 63U);
+			if ((cell_start_bits[word] & mask) != 0)
+			{
+				return result_t<hive_t>::failure("Registry hive contains duplicate cell boundaries", ERROR_BADDB);
+			}
+			cell_start_bits[word] |= mask;
 			++cell_count;
 			cell_relative += cell_size;
 		}
@@ -193,10 +210,6 @@ result_t<hive_t> hive_t::open(const std::filesystem::path& path)
 		{
 			return result_t<hive_t>::failure("Registry hbin cell region is malformed", ERROR_BADDB);
 		}
-
-		hbins.push_back(impl_t::hbin_range_t{
-			static_cast<std::uint32_t>(relative + detail::hbin_header_size),
-			static_cast<std::uint32_t>(bin_end) });
 		relative = bin_end;
 	}
 
@@ -210,12 +223,11 @@ result_t<hive_t> hive_t::open(const std::filesystem::path& path)
 	impl->root_offset = root.value();
 	impl->data_size = data_size.value();
 	impl->cell_count = cell_count;
-	impl->hbins = std::move(hbins);
-	impl->cell_offsets = std::move(cell_offsets);
+	impl->cell_start_bits = std::move(cell_start_bits);
+	impl->hbin_end_by_page = std::move(hbin_end_by_page);
 	impl->key_cache.emplace(L"", root.value());
 
 	auto root_name = impl->key_name(root.value());
-
 	if (!root_name.ok())
 	{
 		return result_t<hive_t>::failure(root_name.error().message, root_name.error().code);
@@ -336,10 +348,7 @@ result_t<std::vector<std::wstring>> hive_t::subkeys(std::wstring_view path) cons
 
 	std::vector<std::wstring> result;
 	result.reserve(direct.value().size());
-	for (auto& child : direct.value())
-	{
-		result.push_back(std::move(child.name));
-	}
+	for (auto& child : direct.value()) result.push_back(std::move(child.name));
 	return result_t<std::vector<std::wstring>>::success(std::move(result));
 }
 
@@ -363,14 +372,12 @@ result_t<std::optional<value_t>> hive_t::value(
 	std::wstring_view name) const
 {
 	auto values_result = values(path);
-
 	if (!values_result.ok())
 	{
 		if (values_result.error().code == ERROR_FILE_NOT_FOUND)
 		{
 			return result_t<std::optional<value_t>>::success(std::nullopt);
 		}
-
 		return result_t<std::optional<value_t>>::failure(
 			values_result.error().message,
 			values_result.error().code);
@@ -383,7 +390,6 @@ result_t<std::optional<value_t>> hive_t::value(
 			return result_t<std::optional<value_t>>::success(std::move(item));
 		}
 	}
-
 	return result_t<std::optional<value_t>>::success(std::nullopt);
 }
 
@@ -392,21 +398,18 @@ result_t<std::optional<std::wstring>> hive_t::string(
 	std::wstring_view name) const
 {
 	auto value_result = value(path, name);
-
 	if (!value_result.ok())
 	{
 		return result_t<std::optional<std::wstring>>::failure(
 			value_result.error().message,
 			value_result.error().code);
 	}
-
 	if (!value_result.value().has_value())
 	{
 		return result_t<std::optional<std::wstring>>::success(std::nullopt);
 	}
 
 	const auto& data = *value_result.value();
-
 	if (data.type != REG_SZ && data.type != REG_EXPAND_SZ)
 	{
 		return result_t<std::optional<std::wstring>>::success(std::nullopt);
@@ -414,19 +417,13 @@ result_t<std::optional<std::wstring>> hive_t::string(
 
 	auto decoded = decode_utf16(
 		std::span<const std::byte>(data.data.data(), data.data.size()));
-
 	if (!decoded.ok())
 	{
 		return result_t<std::optional<std::wstring>>::failure(decoded.error().message, decoded.error().code);
 	}
 
 	auto text = std::move(decoded).value();
-
-	while (!text.empty() && text.back() == L'\0')
-	{
-		text.pop_back();
-	}
-
+	while (!text.empty() && text.back() == L'\0') text.pop_back();
 	return result_t<std::optional<std::wstring>>::success(std::move(text));
 }
 
@@ -435,21 +432,18 @@ result_t<std::optional<std::uint32_t>> hive_t::dword(
 	std::wstring_view name) const
 {
 	auto value_result = value(path, name);
-
 	if (!value_result.ok())
 	{
 		return result_t<std::optional<std::uint32_t>>::failure(
 			value_result.error().message,
 			value_result.error().code);
 	}
-
 	if (!value_result.value().has_value())
 	{
 		return result_t<std::optional<std::uint32_t>>::success(std::nullopt);
 	}
 
 	const auto& data = *value_result.value();
-
 	if (data.type != REG_DWORD || data.data.size() != sizeof(std::uint32_t))
 	{
 		return result_t<std::optional<std::uint32_t>>::success(std::nullopt);
@@ -465,14 +459,12 @@ result_t<std::vector<std::wstring>> hive_t::multi_string(
 	std::wstring_view name) const
 {
 	auto value_result = value(path, name);
-
 	if (!value_result.ok())
 	{
 		return result_t<std::vector<std::wstring>>::failure(
 			value_result.error().message,
 			value_result.error().code);
 	}
-
 	if (!value_result.value().has_value() || value_result.value()->type != REG_MULTI_SZ)
 	{
 		return result_t<std::vector<std::wstring>>::success({});
@@ -481,7 +473,6 @@ result_t<std::vector<std::wstring>> hive_t::multi_string(
 	auto decoded = decode_utf16(std::span<const std::byte>(
 		value_result.value()->data.data(),
 		value_result.value()->data.size()));
-
 	if (!decoded.ok())
 	{
 		return result_t<std::vector<std::wstring>>::failure(decoded.error().message, decoded.error().code);
@@ -490,25 +481,14 @@ result_t<std::vector<std::wstring>> hive_t::multi_string(
 	const std::wstring& text = decoded.value();
 	std::vector<std::wstring> result;
 	std::size_t cursor = 0;
-
 	while (cursor < text.size())
 	{
 		std::size_t end = cursor;
-
-		while (end < text.size() && text[end] != L'\0')
-		{
-			++end;
-		}
-
-		if (end == cursor)
-		{
-			break;
-		}
-
+		while (end < text.size() && text[end] != L'\0') ++end;
+		if (end == cursor) break;
 		result.emplace_back(text.data() + cursor, end - cursor);
 		cursor = end + 1;
 	}
-
 	return result_t<std::vector<std::wstring>>::success(std::move(result));
 }
 
