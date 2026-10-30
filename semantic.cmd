@@ -6,13 +6,19 @@ set "ROOT=%CD%"
 set "DB=%~1"
 if "%DB%"=="" set "DB=%ROOT%\output\image.db"
 set "SEMANTIC=%ROOT%\bin\nylon-semantic.exe"
+set "LINKER=%ROOT%\bin\nylon-semantic-link.exe"
 set "VIEWER=%ROOT%\bin\nylon-viewer.exe"
 
-if not exist "%SEMANTIC%" (
-    echo Nylon Semantic Lifter is not built yet. Building it now...
-    call "%ROOT%\build-semantic.cmd"
-    if errorlevel 1 exit /b 1
-)
+if not exist "%SEMANTIC%" goto build_semantic
+if not exist "%LINKER%" goto build_semantic
+goto semantic_built
+
+:build_semantic
+echo Nylon Semantic Lifter is not built yet. Building it now...
+call "%ROOT%\build-semantic.cmd"
+if errorlevel 1 exit /b 1
+
+:semantic_built
 if not exist "%VIEWER%" (
     echo Nylon Viewer is not built yet. Building it now...
     call "%ROOT%\build-viewer.cmd"
@@ -48,4 +54,8 @@ if "!SEMANTIC_RC!"=="2" if !SEMANTIC_PASS! LSS 3 (
     echo Retrying incomplete semantic work ^(pass !SEMANTIC_PASS! of 3 complete^)...
     goto run_pass
 )
-exit /b !SEMANTIC_RC!
+if not "!SEMANTIC_RC!"=="0" exit /b !SEMANTIC_RC!
+
+echo Building deterministic semantic hierarchy...
+"%LINKER%" "%DB%"
+exit /b !ERRORLEVEL!
