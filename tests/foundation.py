@@ -104,7 +104,8 @@ def collect(root, destination):
     assert connection.execute("select source_identity_state from audit_identity").fetchone() == (
         "WEAK_RUN_SCOPED_NO_CONTAINER",
     )
-    assert connection.execute("select count(*) from collector_runs where state='PENDING'").fetchone()[0] == 16
+    assert connection.execute("select count(*) from collector_runs where state='PENDING'").fetchone()[0] == 15
+    assert connection.execute("select state,discovery_complete from collector_runs where collector='source_media'").fetchone() == ("PARTIAL", 0)
     assert connection.execute("select count(*) from source_metadata_availability where state='NOT_EXPOSED'").fetchone()[0] == 11
     return connection
 
@@ -152,7 +153,8 @@ def main():
         identities = result.execute("select volume_serial,file_index,link_count from fs_entries where path in (?,?)", ("hardlink.bin", "Unicode-é-日本語\\payload.bin")).fetchall()
         assert len(identities) == 2 and identities[0] == identities[1] and identities[0][2] == 2
         assert result.execute("select discovery_complete from collector_runs where collector='filesystem'").fetchone()[0] == 1
-        assert not result.execute("select * from evidence_gaps").fetchall()
+        assert not result.execute("select * from evidence_gaps where collector='filesystem'").fetchall()
+        assert result.execute("select operation,state from evidence_gaps where collector='source_media' order by operation").fetchall() == [("image_catalog", "NOT_EXPOSED"), ("remaining_source_media", "UNRESOLVED")]
         identity = result.execute("select audit_id from audit_identity").fetchone()[0]
         result.close()
         assert_refused(workspace / "namespace.db", workspace / "wrong-parent.db", "UPDATE fs_entries SET parent_id=(SELECT id FROM fs_entries WHERE path='empty') WHERE path='hardlink.bin';")
@@ -201,7 +203,7 @@ def main():
         assert invalid.execute("select discovery_complete from collector_runs where collector='filesystem'").fetchone()[0] == 1
         assert invalid.execute("select count(*) from evidence_gaps where operation='encode_path'").fetchone()[0] == 1
         invalid.close()
-        assert_refused(workspace / "encoding.db", workspace / "hidden-encoding-gap.db", "DELETE FROM evidence_gaps; UPDATE collector_runs SET failed=0,unresolved=0,state='COMPLETE' WHERE collector='filesystem';")
+        assert_refused(workspace / "encoding.db", workspace / "hidden-encoding-gap.db", "DELETE FROM evidence_gaps WHERE collector='filesystem'; UPDATE collector_runs SET failed=0,unresolved=0,state='COMPLETE' WHERE collector='filesystem';")
         subprocess.run(["icacls.exe", str(blocked), "/deny", "*S-1-1-0:(RD)"], check=True, capture_output=True)
         try:
             denied = collect(root, workspace / "denied.db")
@@ -224,7 +226,7 @@ def main():
         with sqlite3.connect(workspace / "output" / "image.db") as scanned:
             assert scanned.execute("select count(*) from registry_keys").fetchone()[0] == 4
             assert scanned.execute("select count(*) from registry_values where text_value='42'").fetchone()[0] == 4
-            assert scanned.execute("select schema_version,state from audit_identity").fetchone() == (4, "PARTIAL")
+            assert scanned.execute("select schema_version,state from audit_identity").fetchone() == (5, "PARTIAL")
             assert scanned.execute("select count(*) from registry_sources where state='REDACTED_SENSITIVE'").fetchone()[0] == 2
             assert scanned.execute("select count(*) from registry_hives h join registry_sources s on s.hive_id=h.id join fs_entries f on f.id=s.entry_id where h.source_path=f.path").fetchone()[0] == 4
             assert scanned.execute("pragma integrity_check").fetchall() == [("ok",)]

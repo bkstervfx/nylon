@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -143,6 +144,26 @@ result_t<ULONG> bcrypt_ulong_property(
 	return result_t<ULONG>::success(value);
 }
 
+}
+
+result_t<std::string> sha256_bytes(std::span<const std::byte> bytes)
+{
+	if (bytes.size() > std::numeric_limits<ULONG>::max()) return result_t<std::string>::failure("SHA-256 memory input exceeds API limit");
+	BCRYPT_ALG_HANDLE raw = nullptr;
+	auto status = BCryptOpenAlgorithmProvider(&raw, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
+	if (!BCRYPT_SUCCESS(status)) return result_t<std::string>::failure("Unable to open SHA-256 provider", static_cast<std::uint32_t>(status));
+	algorithm_handle_t algorithm(raw);
+	std::array<UCHAR, 32> digest{};
+	status = BCryptHash(algorithm.get(), nullptr, 0, reinterpret_cast<PUCHAR>(const_cast<std::byte*>(bytes.data())), static_cast<ULONG>(bytes.size()), digest.data(), static_cast<ULONG>(digest.size()));
+	if (!BCRYPT_SUCCESS(status)) return result_t<std::string>::failure("Unable to hash memory", static_cast<std::uint32_t>(status));
+	constexpr char hex[] = "0123456789abcdef";
+	std::string result;
+	for (const auto value : digest)
+	{
+		result.push_back(hex[value >> 4U]);
+		result.push_back(hex[value & 15U]);
+	}
+	return result_t<std::string>::success(std::move(result));
 }
 
 result_t<std::string> sha256_file(const std::filesystem::path& path)

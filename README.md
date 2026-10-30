@@ -8,14 +8,24 @@ Current implementation covers the project foundation, a selected-image working-n
 inventory, direct binary registry-hive auditing and portable Windows ISO preparation.
 This is not yet exhaustive whole-image domain collection.
 
-The raw schema v4 foundation records `audit_identity`, `collector_runs`, `fs_entries`,
+The raw schema v5 foundation records `audit_identity`, `collector_runs`, `fs_entries`,
 `evidence_gaps` and `source_metadata_availability`. Filesystem discovery/representation
-are separate from parsing and from all other required collector families, which remain
-pending until migrated. Paths preserve exact UTF-16 identity plus readable/comparison
+are separate from parsing and from other required collector families, which remain
+pending or explicitly partial until migrated. Paths preserve exact UTF-16 identity plus readable/comparison
 forms where conversion succeeds. Reparse entries are recorded without following targets.
 Working-view metadata is not original source metadata; uncollected original fields are
 explicitly `NOT_EXPOSED`. Expanded-tree source identity is explicitly weaker/run-scoped,
 not a content hash. Existing audits require a fresh staged scan, not an in-place upgrade.
+
+Newly prepared ISO caches retain the original install-container XML catalog and its
+SHA-256. `source_catalog`, `source_images` and `source_image_fields` preserve exact XML,
+all exposed indexes and ordered/repeated image metadata fields (including unknown fields).
+The bounded XML projection prohibits DTDs/external resolution; unsupported/malformed
+retained catalogs have explicit failure states, not false absence. Legacy warm caches
+are reused unchanged and explicitly report catalog metadata `NOT_EXPOSED`; no payload
+reapplication or in-place cache upgrade is performed merely to add metadata. Source-media
+collection remains `PARTIAL`: setup/boot inventory and original per-file metadata are
+not yet collected. Catalog interpretation is not whole-image coverage.
 
 Registry discovery now consumes that inventory rather than recursively walking image
 directories again. Every file-header probe and stock-hive query is accounted in
@@ -29,6 +39,8 @@ publication can therefore be a `PARTIAL` audit with explicit collector gaps; it 
 whole-image completion. Raw staging uses rollback journaling to isolate failed hives.
 
 After `build.cmd`, `test-foundation.cmd` runs deterministic namespace and registry fixtures.
+`test-catalog.cmd` exercises catalog retention/accounting, parser limits and synthetic
+cold/warm cache paths; synthetic tool fixtures are not real ISO/WIM validation.
 
 ## Build
 

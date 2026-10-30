@@ -26,13 +26,6 @@ namespace nylon::media
 namespace
 {
 
-constexpr std::size_t max_catalog_bytes = 64U * 1024U * 1024U;
-
-struct catalog_image_t
-{
-	std::uint32_t index = 0;
-	std::wstring name;
-};
 
 struct install_image_t
 {
@@ -111,287 +104,6 @@ bool regular_file_exists(const std::filesystem::path& path)
 	return !error && result;
 }
 
-result_t<std::vector<std::byte>> read_file_bytes(
-	const std::filesystem::path& path,
-	std::size_t maximum)
-{
-	std::error_code size_error;
-	const auto size = std::filesystem::file_size(path, size_error);
-	if (size_error)
-	{
-		return result_t<std::vector<std::byte>>::failure(
-			"Unable to read catalog size",
-			static_cast<std::uint32_t>(size_error.value()));
-	}
-
-	if (size > maximum || size > static_cast<std::uintmax_t>(std::numeric_limits<std::size_t>::max()))
-	{
-		return result_t<std::vector<std::byte>>::failure("WIM XML catalog is unexpectedly large");
-	}
-
-	std::ifstream stream(path, std::ios::binary);
-	if (!stream)
-	{
-		return result_t<std::vector<std::byte>>::failure("Unable to open WIM XML catalog");
-	}
-
-	std::vector<std::byte> bytes(static_cast<std::size_t>(size));
-	if (!bytes.empty())
-	{
-		stream.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-		if (!stream || stream.gcount() != static_cast<std::streamsize>(bytes.size()))
-		{
-			return result_t<std::vector<std::byte>>::failure("Unable to read complete WIM XML catalog");
-		}
-	}
-
-	return result_t<std::vector<std::byte>>::success(std::move(bytes));
-}
-
-result_t<std::wstring> decode_catalog(const std::filesystem::path& path)
-{
-	auto bytes_result = read_file_bytes(path, max_catalog_bytes);
-	if (!bytes_result.ok())
-	{
-		return result_t<std::wstring>::failure(
-			bytes_result.error().message,
-			bytes_result.error().code);
-	}
-
-	const auto& bytes = bytes_result.value();
-	if (bytes.empty())
-	{
-		return result_t<std::wstring>::failure("WIM XML catalog is empty");
-	}
-
-	auto byte_at = [&bytes](std::size_t index) -> unsigned char
-	{
-		return std::to_integer<unsigned char>(bytes[index]);
-	};
-
-	if (bytes.size() >= 2U &&
-		((byte_at(0) == 0xFFU && byte_at(1) == 0xFEU) ||
-		 (byte_at(0) == 0xFEU && byte_at(1) == 0xFFU)))
-	{
-		const bool little_endian = byte_at(0) == 0xFFU;
-		if (((bytes.size() - 2U) & 1U) != 0)
-		{
-			return result_t<std::wstring>::failure("WIM XML UTF-16 catalog has an odd byte length");
-		}
-
-		std::wstring text;
-		text.reserve((bytes.size() - 2U) / 2U);
-		for (std::size_t index = 2U; index + 1U < bytes.size(); index += 2U)
-		{
-			const std::uint16_t first = byte_at(index);
-			const std::uint16_t second = byte_at(index + 1U);
-			const std::uint16_t code_unit = little_endian
-				? static_cast<std::uint16_t>(first | (second << 8U))
-				: static_cast<std::uint16_t>((first << 8U) | second);
-			text.push_back(static_cast<wchar_t>(code_unit));
-		}
-		return result_t<std::wstring>::success(std::move(text));
-	}
-
-	std::size_t offset = 0;
-	if (bytes.size() >= 3U && byte_at(0) == 0xEFU && byte_at(1) == 0xBBU && byte_at(2) == 0xBFU)
-	{
-		offset = 3U;
-	}
-
-	std::string utf8;
-	utf8.resize(bytes.size() - offset);
-	for (std::size_t index = offset; index < bytes.size(); ++index)
-	{
-		utf8[index - offset] = static_cast<char>(byte_at(index));
-	}
-
-	auto wide = platform::wide(utf8);
-	if (!wide.ok())
-	{
-		return result_t<std::wstring>::failure(wide.error().message, wide.error().code);
-	}
-	return wide;
-}
-
-std::wstring xml_unescape(std::wstring_view value)
-{
-	std::wstring result;
-	result.reserve(value.size());
-
-	for (std::size_t index = 0; index < value.size();)
-	{
-		struct entity_t
-		{
-			std::wstring_view encoded;
-			wchar_t decoded;
-		};
-		static constexpr entity_t entities[] = {
-			{ L"&amp;", L'&' },
-			{ L"&lt;", L'<' },
-			{ L"&gt;", L'>' },
-			{ L"&quot;", L'\"' },
-			{ L"&apos;", L'\'' }
-		};
-
-		bool matched = false;
-		for (const auto& entity : entities)
-		{
-			if (value.substr(index).starts_with(entity.encoded))
-			{
-				result.push_back(entity.decoded);
-				index += entity.encoded.size();
-				matched = true;
-				break;
-			}
-		}
-
-		if (!matched)
-		{
-			result.push_back(value[index]);
-			++index;
-		}
-	}
-
-	return result;
-}
-
-std::optional<std::wstring> element_text(
-	std::wstring_view block,
-	std::wstring_view element)
-{
-	std::wstring start = L"<";
-	start.append(element);
-	start.push_back(L'>');
-	std::wstring end = L"</";
-	end.append(element);
-	end.push_back(L'>');
-
-	const std::size_t begin = block.find(start);
-	if (begin == std::wstring_view::npos)
-	{
-		return std::nullopt;
-	}
-
-	const std::size_t content_begin = begin + start.size();
-	const std::size_t content_end = block.find(end, content_begin);
-	if (content_end == std::wstring_view::npos)
-	{
-		return std::nullopt;
-	}
-
-	return xml_unescape(block.substr(content_begin, content_end - content_begin));
-}
-
-std::optional<std::uint32_t> parse_image_index(std::wstring_view opening_tag)
-{
-	std::size_t marker = opening_tag.find(L"INDEX=\"");
-	wchar_t quote = L'\"';
-	if (marker == std::wstring_view::npos)
-	{
-		marker = opening_tag.find(L"INDEX='");
-		quote = L'\'';
-	}
-	if (marker == std::wstring_view::npos)
-	{
-		return std::nullopt;
-	}
-
-	marker += 7U;
-	std::uint64_t value = 0;
-	std::size_t digits = 0;
-	while (marker < opening_tag.size() && opening_tag[marker] != quote)
-	{
-		const wchar_t character = opening_tag[marker];
-		if (character < L'0' || character > L'9')
-		{
-			return std::nullopt;
-		}
-		value = value * 10U + static_cast<std::uint64_t>(character - L'0');
-		if (value > std::numeric_limits<std::uint32_t>::max())
-		{
-			return std::nullopt;
-		}
-		++digits;
-		++marker;
-	}
-
-	if (digits == 0U || marker >= opening_tag.size() || value == 0U)
-	{
-		return std::nullopt;
-	}
-
-	return static_cast<std::uint32_t>(value);
-}
-
-result_t<std::vector<catalog_image_t>> parse_catalog(const std::filesystem::path& path)
-{
-	auto text_result = decode_catalog(path);
-	if (!text_result.ok())
-	{
-		return result_t<std::vector<catalog_image_t>>::failure(
-			text_result.error().message,
-			text_result.error().code);
-	}
-
-	const std::wstring& text = text_result.value();
-	std::vector<catalog_image_t> images;
-	std::size_t cursor = 0;
-
-	while (cursor < text.size())
-	{
-		const std::size_t image_begin = text.find(L"<IMAGE", cursor);
-		if (image_begin == std::wstring::npos)
-		{
-			break;
-		}
-
-		const std::size_t tag_end = text.find(L'>', image_begin);
-		const std::size_t image_end = text.find(L"</IMAGE>", tag_end == std::wstring::npos ? image_begin : tag_end);
-		if (tag_end == std::wstring::npos || image_end == std::wstring::npos)
-		{
-			return result_t<std::vector<catalog_image_t>>::failure("WIM XML contains a truncated IMAGE element");
-		}
-
-		const auto index = parse_image_index(std::wstring_view(text).substr(
-			image_begin,
-			tag_end - image_begin + 1U));
-		if (!index.has_value())
-		{
-			return result_t<std::vector<catalog_image_t>>::failure("WIM XML IMAGE element has an invalid index");
-		}
-
-		std::wstring name = L"(unnamed)";
-		const auto image_block = std::wstring_view(text).substr(
-			tag_end + 1U,
-			image_end - tag_end - 1U);
-		if (auto parsed_name = element_text(image_block, L"NAME"); parsed_name.has_value() && !parsed_name->empty())
-		{
-			name = std::move(*parsed_name);
-		}
-
-		if (std::any_of(images.begin(), images.end(), [&](const catalog_image_t& existing)
-			{ return existing.index == *index; }))
-		{
-			return result_t<std::vector<catalog_image_t>>::failure("WIM XML contains duplicate image indexes");
-		}
-
-		images.push_back(catalog_image_t{ *index, std::move(name) });
-		cursor = image_end + 8U;
-	}
-
-	if (images.empty())
-	{
-		return result_t<std::vector<catalog_image_t>>::failure("No Windows images were found in install media");
-	}
-
-	std::sort(images.begin(), images.end(), [](const catalog_image_t& left, const catalog_image_t& right)
-	{
-		return left.index < right.index;
-	});
-
-	return result_t<std::vector<catalog_image_t>>::success(std::move(images));
-}
 
 std::string catalog_description(const std::vector<catalog_image_t>& images)
 {
@@ -534,7 +246,9 @@ status_t write_manifest(
 	std::string_view iso_sha256,
 	std::uint32_t image_index,
 	std::size_t image_count,
-	std::string image_name)
+	std::string image_name,
+	std::string_view catalog_hash,
+	std::string_view container_path)
 {
 	std::ofstream stream(path, std::ios::binary | std::ios::trunc);
 	if (!stream)
@@ -549,6 +263,8 @@ status_t write_manifest(
 		<< "image_index=" << image_index << '\n'
 		<< "image_count=" << image_count << '\n'
 		<< "image_name=" << sanitize_manifest_value(std::move(image_name)) << '\n'
+		<< "catalog_sha256=" << catalog_hash << '\n'
+		<< "install_container_path=" << container_path << '\n'
 		<< "iso_extractor=7zip-26.05\n"
 		<< "wimlib=1.14.5\n"
 		<< "wim_apply_flags=--no-acls --no-attributes --rpfix\n"
@@ -897,14 +613,57 @@ result_t<prepared_input_t> cached_result(
 	std::string image_name,
 	bool cache_hit)
 {
-	return result_t<prepared_input_t>::success(prepared_input_t{
+	prepared_input_t prepared{
 		entry / L"image",
 		"iso",
 		std::move(iso_sha256),
 		std::move(image_name),
 		image_index,
-		cache_hit
-	});
+		cache_hit, {}, "NOT_EXPOSED", "Legacy immutable cache has no retained catalog.", {}, {}
+	};
+	auto manifest = read_small_text(entry / L"manifest.txt");
+	if (!manifest.ok()) return result_t<prepared_input_t>::failure(manifest.error().message, manifest.error().code);
+	const auto expected = manifest_value(manifest.value(), "catalog_sha256");
+	if (expected.has_value())
+	{
+		prepared.catalog_state = "QUERY_FAILED";
+		prepared.catalog_detail = "Declared retained catalog is missing, unreadable or hash-mismatched.";
+		auto lock = platform::open_read_lock(entry / L"catalog.xml");
+		if (lock.ok())
+		{
+			auto hash = platform::sha256_file(entry / L"catalog.xml");
+			if (hash.ok() && expected->size() == 64 && hash.value() == *expected)
+			{
+				auto bytes = read_catalog_xml(entry / L"catalog.xml");
+				if (!bytes.ok())
+				{
+					prepared.catalog_detail = bytes.error().message;
+					return result_t<prepared_input_t>::success(std::move(prepared));
+				}
+				prepared.catalog_sha256 = *expected;
+				prepared.install_container_path = manifest_value(manifest.value(), "install_container_path").value_or("");
+				auto catalog = parse_catalog_bytes(bytes.value());
+				if (catalog.ok())
+				{
+					const auto& images = catalog.value().images;
+					const bool selected = std::any_of(images.begin(), images.end(), [&](const auto& image) { return image.index == image_index; });
+					prepared.catalog_state = selected ? "PRESENT" : "UNRESOLVED";
+					prepared.catalog_detail = selected ? "Original install-container XML retained; projection is not complete field interpretation." : "Selected index is missing from retained catalog.";
+					prepared.catalog = std::move(catalog).value();
+					prepared.catalog_sha256 = *expected;
+					prepared.install_container_path = manifest_value(manifest.value(), "install_container_path").value_or("");
+				}
+				else
+				{
+					prepared.catalog_state = "PARSE_FAILED";
+					prepared.catalog_detail = catalog.error().message;
+					prepared.catalog.emplace();
+					prepared.catalog->xml = std::move(bytes).value();
+				}
+			}
+		}
+	}
+	return result_t<prepared_input_t>::success(std::move(prepared));
 }
 
 }
@@ -939,7 +698,7 @@ result_t<prepared_input_t> prepare(
 			{},
 			{},
 			0,
-			false
+			false, {}, "NOT_EXPOSED", "Expanded input has no authoritative install-container catalog.", {}, {}
 		});
 	}
 
@@ -1042,12 +801,12 @@ result_t<prepared_input_t> prepare(
 		return result_t<prepared_input_t>::failure(info_status.error().message, info_status.error().code);
 	}
 
-	auto catalog_result = parse_catalog(catalog_path);
+	auto catalog_result = read_catalog(catalog_path);
 	if (!catalog_result.ok())
 	{
 		return result_t<prepared_input_t>::failure(catalog_result.error().message, catalog_result.error().code);
 	}
-	const auto& images = catalog_result.value();
+	const auto& images = catalog_result.value().images;
 
 	auto index_result = choose_image_index(images, options.image_index);
 	if (!index_result.ok())
@@ -1117,12 +876,20 @@ result_t<prepared_input_t> prepare(
 			"Applied WIM image failed validation because required offline registry hives are missing");
 	}
 
+	std::filesystem::copy_file(catalog_path, entry_stage / L"catalog.xml", create_error);
+	if (create_error) return result_t<prepared_input_t>::failure("Unable to retain install catalog", static_cast<std::uint32_t>(create_error.value()));
+	auto catalog_hash = platform::sha256_file(entry_stage / L"catalog.xml");
+	if (!catalog_hash.ok()) return result_t<prepared_input_t>::failure(catalog_hash.error().message, catalog_hash.error().code);
+	auto container_path = platform::utf8(install.primary.lexically_relative(media_root).generic_wstring());
+	if (!container_path.ok()) return result_t<prepared_input_t>::failure(container_path.error().message, container_path.error().code);
 	auto manifest_status = write_manifest(
 		entry_stage / L"manifest.txt",
 		iso_sha256,
 		image_index,
 		images.size(),
-		image_name);
+		image_name,
+		catalog_hash.value(),
+		container_path.value());
 	if (!manifest_status.ok())
 	{
 		return result_t<prepared_input_t>::failure(

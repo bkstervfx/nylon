@@ -37,6 +37,10 @@ jobs:
         shell: cmd
         run: test-foundation.cmd
 
+      - name: Verify retained source catalog
+        shell: cmd
+        run: test-catalog.cmd
+
       - name: Smoke-test ISO hashing path
         shell: cmd
         run: |

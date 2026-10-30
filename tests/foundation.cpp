@@ -11,8 +11,10 @@ int wmain(int argc, wchar_t** argv)
 	auto database = std::move(opened).value();
 	const bool verify_only = std::wstring_view(argv[1]) == L"--verify";
 	auto status = verify_only ? nylon::status_t::success() : database.initialize();
-	if (!verify_only && status.ok()) status = nylon::evidence::initialize(database,
-		nylon::media::prepared_input_t{ argv[1], "expanded", {}, {}, 0, false });
+	nylon::media::prepared_input_t input;
+	input.image_root = argv[1];
+	input.source_kind = "expanded";
+	if (!verify_only && status.ok()) status = nylon::evidence::initialize(database, input);
 	if (!verify_only && status.ok()) status = nylon::evidence::inventory(database, argv[1]);
 	if (status.ok()) status = nylon::evidence::verify(database);
 	if (status.ok()) status = nylon::database::quick_check(database);

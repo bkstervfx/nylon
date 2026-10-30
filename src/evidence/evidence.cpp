@@ -20,7 +20,7 @@ status_t initialize(database::database_t& database, const media::prepared_input_
 CREATE TABLE audit_identity (
  singleton INTEGER PRIMARY KEY CHECK(singleton=1),
  audit_id TEXT NOT NULL UNIQUE,
- schema_version INTEGER NOT NULL CHECK(schema_version=4),
+ schema_version INTEGER NOT NULL CHECK(schema_version=5),
  source_kind TEXT NOT NULL,
  source_sha256 TEXT,
  source_identity_state TEXT NOT NULL,
@@ -120,7 +120,7 @@ CREATE TABLE source_metadata_availability (
 			identity.push_back(hex[byte >> 4U]);
 			identity.push_back(hex[byte & 15U]);
 		}
-		query_t insert(handle, "INSERT INTO audit_identity(singleton,audit_id,schema_version,source_kind,source_sha256,source_identity_state,selected_index,selected_name,preparation_policy,collector_policy) VALUES(1,?1,4,?2,?3,?4,?5,?6,?7,'namespace-v1;registry-inventory-v1;sensitive-omission-v1');");
+		query_t insert(handle, "INSERT INTO audit_identity(singleton,audit_id,schema_version,source_kind,source_sha256,source_identity_state,selected_index,selected_name,preparation_policy,collector_policy) VALUES(1,?1,5,?2,?3,?4,?5,?6,?7,'namespace-v1;registry-inventory-v1;sensitive-omission-v1;catalog-v1');");
 		insert.text(1, identity);
 		insert.text(2, input.source_kind);
 		if (!input.iso_sha256.empty()) insert.text(3, input.iso_sha256);
@@ -139,7 +139,7 @@ CREATE TABLE source_metadata_availability (
 			collector.done();
 		}
 		query_t metadata(handle, "INSERT INTO source_metadata_availability VALUES(?1,'NOT_EXPOSED','ORIGINAL_SOURCE',?2);");
-		for (const auto* field : { "security_descriptors", "original_attributes", "original_timestamps", "original_reparse_data", "named_streams", "extended_attributes", "sparse_compression", "original_hardlink_identity", "container_resource_identity", "image_catalog", "setup_boot_media" })
+		for (const auto field : original_metadata_fields)
 		{
 			metadata.text(1, field);
 			metadata.text(2, "Not collected authoritatively by namespace-v1; working-view observations are separate, not original metadata.");
@@ -147,7 +147,9 @@ CREATE TABLE source_metadata_availability (
 		}
 		auto status = database.meta("audit_id", identity);
 		if (!status.ok()) return status;
-		return database.meta("schema_version", "4");
+		status = initialize_source_media(database, input);
+		if (!status.ok()) return status;
+		return database.meta("schema_version", "5");
 	}
 	catch (const std::exception& error) { return status_t::failure(error.what()); }
 }
@@ -159,7 +161,7 @@ status_t verify(database::database_t& database)
 		auto* handle = database.native_handle();
 		query_t check(handle, R"sql(
 SELECT
- (SELECT count(*) FROM audit_identity WHERE schema_version=4)=1
+ (SELECT count(*) FROM audit_identity WHERE schema_version=5)=1
  AND NOT EXISTS(SELECT 1 FROM collector_runs c,audit_identity a WHERE c.audit_id<>a.audit_id)
  AND NOT EXISTS(SELECT 1 FROM fs_entries f LEFT JOIN fs_entries p ON p.id=f.parent_id
                 WHERE f.parent_id IS NOT NULL AND (p.id IS NULL OR p.kind<>'DIRECTORY'))
@@ -192,7 +194,7 @@ SELECT
 		check_sql(handle, code);
 		if (code != SQLITE_ROW || sqlite3_column_int(check.get(), 0) != 1)
 			return status_t::failure("Raw namespace accounting invariant failed");
-		query_t family(handle, "SELECT count(*) FROM collector_runs WHERE collector=?1 AND audit_id=(SELECT audit_id FROM audit_identity) AND state IN ('PENDING','COMPLETE','COMPLETE_WITH_GAPS','FAILED','STALLED');");
+		query_t family(handle, "SELECT count(*) FROM collector_runs WHERE collector=?1 AND audit_id=(SELECT audit_id FROM audit_identity) AND state IN ('PENDING','PARTIAL','COMPLETE','COMPLETE_WITH_GAPS','FAILED','STALLED');");
 		for (const auto name : required_collectors)
 		{
 			family.text(1, name);
@@ -238,6 +240,8 @@ SELECT
 			if (registry_code != SQLITE_ROW || sqlite3_column_int(registry.get(), 0) != 1)
 				return status_t::failure("Inventory registry accounting/provenance invariant failed");
 		}
+		auto media_status = verify_source_media(database);
+		if (!media_status.ok()) return media_status;
 		query_t foreign_keys(handle, "PRAGMA foreign_key_check;");
 		const auto foreign_key_code = sqlite3_step(foreign_keys.get());
 		check_sql(handle, foreign_key_code);

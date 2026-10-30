@@ -141,6 +141,8 @@ if errorlevel 1 (
 for /r "%ROOT%\src" %%F in (*.cpp) do call :append_rsp_path "%%~fF"
 >> "%RSP%" echo "%SQLITE_OBJ_RSP%"
 >> "%RSP%" echo -lbcrypt
+>> "%RSP%" echo -lxmllite
+>> "%RSP%" echo -lshlwapi
 >> "%RSP%" echo -o
 >> "%RSP%" echo "%NYLON_EXE_RSP%"
 

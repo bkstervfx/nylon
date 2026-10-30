@@ -158,9 +158,13 @@ def main():
         database.execute("INSERT INTO metadata VALUES('audit_id',?)", ("a" * 64,))
         database.commit()
         database.close()
-        run(RUNTIME, source, "--plan-only")
-        assert scalar(mapped, "SELECT value FROM metadata WHERE key='source_audit_id'") == "a" * 64
-        assert digest(source) in scalar(mapped, "SELECT value FROM metadata WHERE key='source_fingerprint'")
+        for schema in ["4", "5"]:
+            with sqlite3.connect(source) as upgraded:
+                upgraded.execute("UPDATE metadata SET value=? WHERE meta_key='schema_version'", (schema,))
+            upgraded.close()
+            run(RUNTIME, source, "--plan-only")
+            assert scalar(mapped, "SELECT value FROM metadata WHERE key='source_audit_id'") == "a" * 64
+            assert digest(source) in scalar(mapped, "SELECT value FROM metadata WHERE key='source_fingerprint'")
         database = sqlite3.connect(source)
         database.execute("INSERT INTO registry_hives VALUES(2,'SAM','Windows\\System32\\config\\SAM',1)")
         database.commit()
@@ -171,7 +175,7 @@ def main():
             result = run(executable, *arguments, success=False)
             assert "Sensitive or unreviewed registry hive input" in result.stderr
             assert digest(mapped) == map_hash
-    print("PASS: synthetic semantic plan/preclassify/resume/fake-HTTP/hierarchy source accounting; content binding, relocation, same-size/time mutation, auxiliary refusal, WAL refusal and v4 metadata")
+    print("PASS: synthetic semantic plan/preclassify/resume/fake-HTTP/hierarchy source accounting; content binding, relocation, same-size/time mutation, auxiliary refusal, WAL refusal and v4/v5 metadata")
 
 
 if __name__ == "__main__":

@@ -198,6 +198,53 @@ native-viewer validation remain outstanding.
 - Next dependency: source/media catalog retention and authoritative metadata availability,
   then indexed deterministic domain collectors. This is not migration completion.
 
+## M5 — retained install-image catalog
+
+- Purpose/prerequisite: retain original install-container XML already exposed by ISO
+  preparation, using M1 identity and accounting; do not reapply unchanged payloads.
+- Scope: bounded, DTD-prohibited XML parsing; exact catalog bytes; all exposed image
+  indexes and repeated leaf metadata with original paths/order; selected-index binding;
+  immutable new-cache retention with hash; explicit availability on legacy warm caches
+  and expanded trees. Preserve the existing preparation/cache implementation.
+- Non-scope: direct WIM/ESD/SWM input support, per-file original metadata extraction,
+  full setup/boot media inventory, model/UI work, or claiming source_media complete.
+- Completion invariant: every retained catalog has a parse outcome; when PRESENT each
+  index is unique and represented, the selected index exists, and every extracted leaf
+  is retained with provenance. Parse failures/unresolved selection remain explicit;
+  exact XML is retained independently of projection. Missing/invalid retained metadata
+  cannot become absence or invalidate unrelated namespace evidence. Old caches remain
+  untouched and explicitly NOT_EXPOSED. source_media remains partial with known gaps.
+- Compatibility: raw schema v5, fresh audit only; exact-hash semantic invalidation stays
+  unchanged. Existing immutable cache format 1 accepted without catalog; new optional
+  catalog/hash pair must agree. No in-place cache/database upgrades.
+- Required validation: supported builds, existing foundation/binding fixtures, catalog
+  Unicode/entities/repeats/unknown fields and malformed/DTD/depth/size fixtures, missing
+  selected index, availability/accounting corruption refusal, legacy warm ISO run.
+- Implemented: Windows XmlLite with DTD prohibited, null resolver and depth 64;
+  64 MiB byte limit, exact XML/hash plus ordered leaf/attribute projection. New caches
+  retain XML/hash before atomic publication. Read-locked warm loading never edits a
+  cache; invalid retained XML remains raw evidence with a parse failure. Publication
+  rehashes/reparses XML and compares every image, selected flag, field and ordinal;
+  original metadata availability and partial source-media counters/gaps are gated.
+- Verification (2026-10-30): fresh scanner/semantic builds; foundation, catalog and
+  source-binding fixtures passed. Catalog tests exercise synthetic cold apply/retention
+  followed by warm reuse with no additional tool calls, legacy warm caches unchanged,
+  Unicode/numeric entities/repeated/unknown fields, malformed/DTD/depth/size cases,
+  missing selected index, hash failures and 12 publication-corruption cases. Test-only
+  SQLite connections were explicitly closed after a minimal reproducer showed the
+  context manager commits but does not release Windows file handles. No guard weakened.
+- Real evidence: build/real-m5-iso/output/image.db passed strict publication/integrity/FK
+  checks: schema 5, same source hash/index and 122,063 namespace entries. Legacy catalog
+  correctly NOT_EXPOSED; source_media PARTIAL and 14 families PENDING. Existing manifest
+  unchanged. Separately, pinned 7-Zip extracted only sources/install.wim into ignored
+  build/real-m5-catalog under a stable original-ISO lock; wimlib extracted XML, parser
+  accepted all 3 indexes. XML SHA-256:
+  4dea266ecb803488350380a724b2c736d099ef76b7f0e6a419c644f470c15f9e.
+  No payload apply, original-cache mutation, real-model claim or remote CI claim.
+- Scoped M5 invariant satisfied by the observed tests; source-media family and overall
+  migration remain incomplete. Next: source-identity-bound metadata-only catalog reuse
+  for legacy warm caches, without applying payloads or editing those caches.
+
 ## Context checkpoint / exact resume
 
 - Current verified implementation HEAD: `1096fe005c5de10d6973e40043dd03ba230f63b8`.
