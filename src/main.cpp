@@ -18,6 +18,7 @@
 #include "platform/win32.hpp"
 #include "progress/progress.hpp"
 #include "registry/registry.hpp"
+#include "services/control_sets.hpp"
 
 namespace
 {
@@ -388,7 +389,7 @@ int wmain(int argc, wchar_t** argv)
 	}
 
 	for (const auto& [key, value] : {
-		std::pair<std::string_view, std::string_view>{ "schema_version", "4" },
+		std::pair<std::string_view, std::string_view>{ "schema_version", "6" },
 		{ "mode", "read_only_static_audit" } })
 	{
 		status = database.meta(key, value);
@@ -506,6 +507,16 @@ int wmain(int argc, wchar_t** argv)
 		return 1;
 	}
 
+	std::cout << "offline control sets...\n";
+	status = database.begin();
+	if (status.ok()) status = nylon::services::collect_control_sets(database);
+	if (status.ok()) status = database.commit();
+	if (!status.ok())
+	{
+		database.rollback();
+		print_error(status.error());
+		return 1;
+	}
 	status = database.finalize_graph();
 	if (!status.ok())
 	{

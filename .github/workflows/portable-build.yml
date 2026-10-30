@@ -45,6 +45,10 @@ jobs:
         shell: cmd
         run: test-references.cmd
 
+      - name: Verify offline control-set evidence
+        shell: cmd
+        run: test-controlsets.cmd
+
       - name: Smoke-test ISO hashing path
         shell: cmd
         run: |

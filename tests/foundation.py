@@ -229,7 +229,9 @@ def main():
         with sqlite3.connect(workspace / "output" / "image.db") as scanned:
             assert scanned.execute("select count(*) from registry_keys").fetchone()[0] == 4
             assert scanned.execute("select count(*) from registry_values where text_value='42'").fetchone()[0] == 4
-            assert scanned.execute("select schema_version,state from audit_identity").fetchone() == (5, "PARTIAL")
+            assert scanned.execute("select schema_version,state from audit_identity").fetchone() == (6, "PARTIAL")
+            assert scanned.execute("select state from collector_runs where collector='services'").fetchone() == ("PARTIAL",)
+            assert scanned.execute("select count(*) from service_control_queries where state='NOT_PRESENT'").fetchone()[0] == 3
             assert scanned.execute("select count(*) from registry_sources where state='REDACTED_SENSITIVE'").fetchone()[0] == 2
             assert scanned.execute("select count(*) from registry_hives h join registry_sources s on s.hive_id=h.id join fs_entries f on f.id=s.entry_id where h.source_path=f.path").fetchone()[0] == 4
             assert scanned.execute("pragma integrity_check").fetchall() == [("ok",)]
@@ -248,6 +250,7 @@ def main():
             assert reparse_scan.execute("SELECT count(*) FROM registry_hives").fetchone()[0] == 0
             assert reparse_scan.execute("SELECT discovery_complete FROM collector_runs WHERE collector='filesystem'").fetchone()[0] == 1
             assert reparse_scan.execute("SELECT discovery_complete FROM collector_runs WHERE collector='registry'").fetchone()[0] == 0
+            assert reparse_scan.execute("SELECT count(*) FROM service_control_queries WHERE state='QUERY_FAILED'").fetchone()[0] == 3
         finally:
             reparse_scan.close()
         (image / "unusual.extension").write_bytes(hive_bytes())
@@ -272,6 +275,7 @@ def main():
             assert failed_scan.execute("select count(*) from registry_hives").fetchone()[0] == 1
             assert failed_scan.execute("select state from registry_sources where required_path like '%SOFTWARE'").fetchone()[0] == "MISSING_REQUIRED"
             assert failed_scan.execute("select state from registry_sources where required_path like '%SYSTEM'").fetchone()[0] == "PARSE_FAILED"
+            assert failed_scan.execute("select count(*) from service_control_queries where state='QUERY_FAILED'").fetchone()[0] == 3
             assert "transaction-log" in failed_scan.execute("select detail from registry_sources where required_path like '%COMPONENTS'").fetchone()[0]
             assert failed_scan.execute("select state from registry_sources s join fs_entries f on f.id=s.entry_id where f.path='unusual.extension'").fetchone()[0] == "REDACTED_POLICY"
             assert failed_scan.execute("select state from registry_sources where required_path like '%SAM'").fetchone()[0] == "REDACTED_SENSITIVE"

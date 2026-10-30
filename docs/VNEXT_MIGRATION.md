@@ -331,35 +331,90 @@ native-viewer validation remain outstanding.
   CI or whole-image completion is claimed. Next: offline control-set selection evidence
   as the prerequisite to service-definition/relationship collection.
 
+## M8 — offline control-set evidence
+
+- Purpose/prerequisite: parsed SYSTEM registry provenance and M7 reference boundary;
+  canonical architecture requires Select evidence, never a guessed CurrentControlSet.
+  Source search found no active offline control-set resolver to reuse.
+- Scope: persist every direct ControlSet* candidate under the parsed SYSTEM root; typed
+  Current/Default/LastKnownGood query outcomes and every matching raw value reference;
+  preserve all Select/root-source ambiguity and relevant omission states. Support the
+  standard positive ControlSetNNN/DWORD form, explicitly flag other formats unsupported.
+- Non-scope: completed services/svchost collector, choosing one implicit active set,
+  runtime service state, service definitions/dependencies, model or UI work.
+- Invariant: all discovered candidates and three role queries represented with exact
+  raw provenance; PRESENT selections require one parsed DWORD and one real target key;
+  failed/missing hives, duplicate sources/Select keys/values/targets, wrong types, redactions
+  and absent targets remain distinct. Publication recomputes and compares the projection.
+  Services stays PARTIAL with an explicit remaining-definition/relationship gap.
+- Validation: source/type/range/duplicate/redaction/target/absence fixtures, corruption
+  refusal, active scanner integration, full regressions and real SYSTEM Select evidence.
+- Compatibility: fresh raw schema v6; registry tables unchanged, semantic registry reader
+  accepts v6 with existing exact raw-hash invalidation. No in-place audit/cache upgrade.
+- Implemented: active scanner calls the domain collector after registry commit, in its
+  own transaction. Compact service_control* tables bind SYSTEM source decisions, parsed
+  root, all supported/unsupported ControlSet* candidates, Select keys, raw value matches
+  and three role outcomes. Counts/quality and the remaining-services gap are gated.
+- Root causes diagnosed: active registry stock paths use uppercase comparison identities,
+  which a mixed-case-only synthetic source fixture initially concealed; discovery now
+  compares the known ASCII stock path case-insensitively and tests both spellings.
+  SQLite TEMP-table DROP was blocked by active verifier SELECT cursors, including callers'
+  main-database cursors (minimal reproducer confirmed). Verification now reuses
+  connection-local TEMP scratch tables rather than performing conflicting DROP DDL;
+  recomputed projections still compare exactly and never modify main/raw rows.
+- Verification (2026-10-30): fresh scanner/semantic builds and foundation, catalog,
+  reference, control-set and source-binding suites passed. Control-set fixtures cover
+  source failures, missing/duplicate roots/Select keys/values/targets, exact DWORD types,
+  range/unsupported forms, omissions, genuine absence, and projection/counter corruption.
+  Active scanner malformed-hive and reparse-ancestor tests retain three QUERY_FAILED
+  role outcomes, not false absence. Semantic registry compatibility/invalidation passed
+  for versions 4/5/6; no whole-evidence semantic completion claim.
+- Fresh real run build/real-m8-iso/output/image.db passed strict publication, reference,
+  control-set and integrity/FK checks: schema 6, same original ISO hash/index 2, 122,063
+  namespace entries, 3 catalog indexes, one ControlSet001, all three Select roles PRESENT
+  and linked to its actual raw key. Services PARTIAL (5/5 units, one remaining-scope gap),
+  source_media PARTIAL, registry COMPLETE_WITH_GAPS, 13 families PENDING. Independent
+  verify-only control-set pass left the exact raw DB SHA-256 unchanged. No remote CI,
+  real-model/hardware, native Atlas or whole-image completion claim.
+- Scoped M8 invariant satisfied by those observations. M9 service definitions/config
+  and references are not implemented. Read-only next-scope inspection found 688 direct
+  candidate keys under SYSTEM/ControlSet001/Services; only 644 have Type/Start, and 631
+  have ImagePath (629 REG_EXPAND_SZ, 2 REG_SZ). These are observed raw counts, not proof
+  that all candidates are valid services or that their references resolve.
+
 ## Context checkpoint / exact resume
 
-- Current verified implementation HEAD: `1096fe005c5de10d6973e40043dd03ba230f63b8`.
-  This note is a subsequent documentation-only checkpoint; `git rev-parse HEAD` identifies
-  the final checkpoint commit. Branch/worktree remain the original isolated ones above.
-- Completed local milestones: M1 `49b5f87`, M2 `3709c2d`, M3 `bf8b56a`, M4 `1096fe0`.
-  Migration is NOT complete. No genuine technical blocker is known. This is a context
-  checkpoint, not a user-approval gate. No push, PR, merge, new branch or main edit occurred.
-- Latest checks: supported scanner/semantic builds passed; foundation and semantic-binding
-  fixtures passed; strict verify-only and SQLite integrity/FKs passed on the ISO-backed
-  audit. Remote CI and complete real-model/hardware/native-viewer paths were not exercised.
-- Exact next action: retain/catalog source metadata through the media preparation boundary,
-  without reapplying unchanged image payloads or editing existing immutable caches. First
-  inspect `src/media/media.hpp`, `media.cpp::parse_catalog`, `write_manifest`, `cached_result`
-  and `prepare`, plus `src/media/cache.cpp`. The current bounded catalog parser extracts
-  only indexes/names; the XML/catalog is discarded with preparation staging. Warm cache
-  results have no full image catalog. Do not promote that parser into complete metadata
-  interpretation or infer catalog facts from filenames. Record a scoped M5 definition,
-  compatibility/invalidation strategy and fixture invariant before implementation.
-- Real validation resource is available at `%USERPROFILE%/Downloads/windows.iso`; its
-  observed hash/index are recorded under M4. Keep it read-only. Existing cache is at
-  `%LOCALAPPDATA%/Temp/nylon/cache/images/<recorded-sha>/index-2/image`. Do not mutate it.
-- Useful commands (from this worktree): `cmd /d /c .\build.cmd`,
-  `cmd /d /c .\build-semantic.cmd`, `cmd /d /c .\test-foundation.cmd`,
-  `python tests/source_binding.py`, and
-  `.\bin\nylon-foundation-test.exe --verify .\build\real-m4-iso\output\image.db`.
-- Current authoritative generated run for inspection: `build/real-m4-iso/output/image.db`;
-  logs `build/real-m4-iso/scan.log`. M3's separate registry-only planning output is under
-  `build/real-m2/output`; never attach that map to the newer ISO-backed audit.
-- Unfinished: M5 source metadata/catalog implementation and 15 pending collector families;
-  original metadata fidelity, raw resume, whole-evidence semantics, browser retirement/
-  native Atlas, safe export and modification/re-scan/retained-function verification.
+- This checkpoint contains verified M8 implementation; `git rev-parse HEAD` identifies
+  its final commit. Previous implementation checkpoint: 8f0a61067214c7ca338398b86fa2f96bb5097d18.
+- Completed local scoped milestones: M1 49b5f87, M2 3709c2d, M3 bf8b56a, M4 1096fe0,
+  M5 82ec18c, M6 586235b, M7 8f0a610, M8 in this checkpoint. Phase A is already complete;
+  do not restart it. Product migration is NOT complete; no architectural blocker known.
+- Next milestone M9 is NOT implemented or formally defined: service-definition inventory,
+  typed configuration and evidence-backed references using all discovered control sets,
+  not only the Current role. Define its scoped invariant/compatibility/tests before edits.
+- Exact next inspection: src/services/control_sets.cpp and its raw source links;
+  src/evidence/references.hpp/.cpp; src/registry/bulk_writer.cpp schemas/indexes;
+  src/main.cpp registry -> control-set -> publication sequence; tests/control_sets.py and
+  tests/foundation.py. Discovery should use indexed raw parent IDs, not directory rescans
+  or substring matching against nested DriverDatabase/other Services keys.
+- Preserve malformed/unknown service candidates and all raw key/value/omission links.
+  M7 intentionally leaves unquoted commands ambiguous, unknown bases/drives/variables and
+  parent traversal unresolved; do not turn these into guessed file/dependency edges.
+- Latest real audit: build/real-m8-iso/output/image.db (schema 6), scan.log alongside;
+  strict gate/integrity/FKs passed. Source ISO remains Downloads/windows.iso with hash
+  recorded above, selected index 2. Existing image payload cache was not upgraded/applied;
+  metadata-only sidecar is cache/catalogs-v1/<ISO-sha> under the persistent runtime root.
+- Commands: cmd /d /c .\build.cmd; cmd /d /c .\build-semantic.cmd;
+  cmd /d /c .\test-foundation.cmd; cmd /d /c .\test-catalog.cmd;
+  cmd /d /c .\test-references.cmd; cmd /d /c .\test-controlsets.cmd;
+  python tests/source_binding.py. Verify real audit with
+  .\bin\nylon-foundation-test.exe --verify .\build\real-m8-iso\output\image.db,
+  .\bin\nylon-references-test.exe --real <same-db>, and
+  .\bin\nylon-controlsets-test.exe --verify <same-db>.
+- Unfinished: service definitions/svchost/relationships, 13 PENDING families, source-media
+  remainder and original per-file metadata, direct WIM/ESD/SWM input, raw resume,
+  whole-evidence semantics, native Atlas, safe export, modification/re-scan/retained-
+  function verification. Registry-only planning/maps under build/real-m2 belong to that
+  older exact audit; never attach them to the schema-6 audit. Browser identity gating
+  remains an explicit gap. No remote CI or real-model/hardware claim.
+- Protected main remains clean at e5f99e6; no pushes, PRs, merges or source-image edits.

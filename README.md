@@ -8,7 +8,7 @@ Current implementation covers the project foundation, a selected-image working-n
 inventory, direct binary registry-hive auditing and portable Windows ISO preparation.
 This is not yet exhaustive whole-image domain collection.
 
-The raw schema v5 foundation records `audit_identity`, `collector_runs`, `fs_entries`,
+The raw schema v6 foundation records `audit_identity`, `collector_runs`, `fs_entries`,
 `evidence_gaps` and `source_metadata_availability`. Filesystem discovery/representation
 are separate from parsing and from other required collector families, which remain
 pending or explicitly partial until migrated. Paths preserve exact UTF-16 identity plus readable/comparison
@@ -54,6 +54,15 @@ ambiguity, parent traversal, reparses and incomplete namespace ancestry stay unr
 host search paths/environment are never used. This helper does not implement the pending
 service/task/driver collectors. Publication also checks readable/comparison paths against
 their original UTF-16 identities before downstream indexed lookups can rely on them.
+
+The services migration now records offline SYSTEM control-set candidates and typed
+`Select\Current`, `Default` and `LastKnownGood` query evidence in `service_control*`
+tables. All raw matches stay linked; a missing/failed hive is not interpreted as absent
+service configuration, and `CurrentControlSet` is never assumed. Standard positive
+`ControlSetNNN`/DWORD selections are supported; other forms remain explicit unsupported
+or unresolved evidence. `test-controlsets.cmd` checks this boundary and its corruption
+gate. Services remains `PARTIAL`: service definitions, svchost and dependency collection
+are not yet implemented. Existing audits need a fresh scan for schema v6.
 
 ## Build
 
