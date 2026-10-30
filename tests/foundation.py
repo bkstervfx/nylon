@@ -109,6 +109,15 @@ def collect(root, destination):
     return connection
 
 
+def assert_refused(source, destination, mutation):
+    shutil.copy2(source, destination)
+    changed = sqlite3.connect(destination)
+    changed.executescript(mutation)
+    changed.close()
+    refused = subprocess.run([str(EXE), "--verify", str(destination)], capture_output=True)
+    assert refused.returncode != 0, f"Publication accepted corrupted evidence: {mutation}"
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="nylon-foundation-", dir=PROJECT / "build") as temporary:
         workspace = Path(temporary)
@@ -117,6 +126,8 @@ def main():
         empty = collect(root, workspace / "empty.db")
         assert empty.execute("select discovered,discovery_complete from collector_runs where collector='filesystem'").fetchone() == (1, 1)
         empty.close()
+        assert_refused(workspace / "empty.db", workspace / "missing-family.db", "DELETE FROM collector_runs WHERE collector='appx';")
+        assert_refused(workspace / "empty.db", workspace / "invalid-counter.db", "UPDATE collector_runs SET parsed=parsed+1 WHERE collector='filesystem';")
         (root / "empty").mkdir()
         (root / "Unicode-é-日本語").mkdir()
         original = root / "Unicode-é-日本語" / "payload.bin"
@@ -144,6 +155,7 @@ def main():
         assert not result.execute("select * from evidence_gaps").fetchall()
         identity = result.execute("select audit_id from audit_identity").fetchone()[0]
         result.close()
+        assert_refused(workspace / "namespace.db", workspace / "wrong-parent.db", "UPDATE fs_entries SET parent_id=(SELECT id FROM fs_entries WHERE path='empty') WHERE path='hardlink.bin';")
         repeated = collect(root, workspace / "repeated.db")
         assert identity != repeated.execute("select audit_id from audit_identity").fetchone()[0]
         assert paths == {row[0] for row in repeated.execute("select path from fs_entries")}
@@ -189,6 +201,7 @@ def main():
         assert invalid.execute("select discovery_complete from collector_runs where collector='filesystem'").fetchone()[0] == 1
         assert invalid.execute("select count(*) from evidence_gaps where operation='encode_path'").fetchone()[0] == 1
         invalid.close()
+        assert_refused(workspace / "encoding.db", workspace / "hidden-encoding-gap.db", "DELETE FROM evidence_gaps; UPDATE collector_runs SET failed=0,unresolved=0,state='COMPLETE' WHERE collector='filesystem';")
         subprocess.run(["icacls.exe", str(blocked), "/deny", "*S-1-1-0:(RD)"], check=True, capture_output=True)
         try:
             denied = collect(root, workspace / "denied.db")
@@ -216,6 +229,22 @@ def main():
             assert scanned.execute("select count(*) from registry_hives h join registry_sources s on s.hive_id=h.id join fs_entries f on f.id=s.entry_id where h.source_path=f.path").fetchone()[0] == 4
             assert scanned.execute("pragma integrity_check").fetchall() == [("ok",)]
         scanned.close()
+        assert_refused(workspace / "output" / "image.db", workspace / "missing-probe.db", "DELETE FROM registry_sources WHERE state='NOT_REGF'; UPDATE collector_runs SET discovered=(SELECT count(*) FROM registry_sources),represented=(SELECT count(*) FROM registry_sources) WHERE collector='registry';")
+        assert_refused(workspace / "output" / "image.db", workspace / "wrong-registry-counter.db", "UPDATE collector_runs SET redacted=0 WHERE collector='registry';")
+        reparse_image = workspace / "windows-reparse"
+        reparse_config = reparse_image / "Windows" / "System32" / "config"
+        reparse_config.parent.mkdir(parents=True)
+        (reparse_config.parent / "ntoskrnl.exe").write_bytes(b"not-executed")
+        subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(reparse_config), str(config)], check=True, capture_output=True)
+        subprocess.run([str(scanner), "scan", str(reparse_image)], check=True, capture_output=True)
+        reparse_scan = sqlite3.connect(workspace / "output" / "image.db")
+        try:
+            assert reparse_scan.execute("SELECT count(*) FROM registry_sources WHERE required=1 AND state='UNRESOLVED'").fetchone()[0] == 6
+            assert reparse_scan.execute("SELECT count(*) FROM registry_hives").fetchone()[0] == 0
+            assert reparse_scan.execute("SELECT discovery_complete FROM collector_runs WHERE collector='filesystem'").fetchone()[0] == 1
+            assert reparse_scan.execute("SELECT discovery_complete FROM collector_runs WHERE collector='registry'").fetchone()[0] == 0
+        finally:
+            reparse_scan.close()
         (image / "unusual.extension").write_bytes(hive_bytes())
         (config / "SOFTWARE").unlink()
         (config / "SYSTEM").write_bytes(partial_failure_hive())
@@ -266,7 +295,7 @@ def main():
             partial.close()
         finally:
             subprocess.run(["icacls.exe", str(denied_folder), "/remove:d", "*S-1-1-0"], check=True, capture_output=True)
-    print("PASS: namespace identity/accounting/adversarial fixtures; inventory registry provenance, redaction, dirty/missing/partial-hive rollback and independent gaps")
+    print("PASS: namespace identity/accounting/adversarial and corrupt-evidence refusal fixtures; inventory registry provenance, redaction, dirty/missing/partial-hive rollback, reparse ancestry and independent gaps")
 
 
 if __name__ == "__main__":

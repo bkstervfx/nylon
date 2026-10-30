@@ -130,7 +130,7 @@ CREATE TABLE source_metadata_availability (
 		insert.text(7, input.source_kind == "iso" ? "7zip-26.05;wimlib-1.14.5;--no-acls --no-attributes --rpfix" : "supplied-expanded-tree;no-preparation");
 		insert.done();
 		query_t collector(handle, "INSERT INTO collector_runs(collector,version,audit_id,scope) VALUES(?1,?2,?3,?4);");
-		for (const auto* family : { "source_media", "filesystem", "registry", "servicing", "components", "features_capabilities", "appx", "services", "tasks", "drivers", "pe_signatures", "com_winrt_shell", "startup", "boot_recovery", "configuration", "certificates", "relationships" })
+		for (const auto family : required_collectors)
 		{
 			collector.text(1, family);
 			collector.text(2, std::string_view(family) == "filesystem" ? "namespace-v1" : "not-migrated");
@@ -165,16 +165,44 @@ SELECT
                 WHERE f.parent_id IS NOT NULL AND (p.id IS NULL OR p.kind<>'DIRECTORY'))
  AND (SELECT count(*) FROM fs_entries WHERE parent_id IS NULL)=1
  AND NOT EXISTS(SELECT 1 FROM fs_entries WHERE children_state='PENDING')
+ AND NOT EXISTS(SELECT 1 FROM fs_entries f WHERE
+   (f.kind='DIRECTORY' AND f.children_state<>'COMPLETE' AND NOT EXISTS(
+     SELECT 1 FROM evidence_gaps g WHERE g.collector='filesystem' AND g.source_entry_id=f.id AND g.operation='enumerate'))
+   OR (f.kind<>'DIRECTORY' AND f.children_state<>'NOT_APPLICABLE')
+   OR (f.encoding_state<>'PRESENT' AND NOT EXISTS(
+     SELECT 1 FROM evidence_gaps g WHERE g.collector='filesystem' AND g.source_entry_id=f.id AND g.operation='encode_path'))
+   OR (f.metadata_state<>'PRESENT' AND NOT EXISTS(
+     SELECT 1 FROM evidence_gaps g WHERE g.collector='filesystem' AND g.source_entry_id=f.id AND g.operation='metadata')))
+ AND NOT EXISTS(SELECT 1 FROM fs_entries f JOIN fs_entries p ON p.id=f.parent_id
+   WHERE f.path IS NOT NULL AND p.path IS NOT NULL AND
+   ((p.path='' AND (f.path='' OR instr(f.path,'\')<>0)) OR
+    (p.path<>'' AND (substr(f.path,1,length(p.path)+1)<>p.path||'\'
+      OR length(f.path)<=length(p.path)+1 OR instr(substr(f.path,length(p.path)+2),'\')<>0))))
  AND NOT EXISTS(SELECT 1 FROM collector_runs WHERE collector='filesystem' AND
    (state NOT IN ('COMPLETE','COMPLETE_WITH_GAPS') OR discovered<>represented
     OR represented<>(SELECT count(*) FROM fs_entries) OR representation_complete<>1
-    OR (discovery_complete=1 AND EXISTS(SELECT 1 FROM evidence_gaps WHERE collector='filesystem' AND operation='enumerate'))))
+    OR parsed<>(SELECT count(*) FROM fs_entries WHERE metadata_state='PRESENT')
+    OR failed<>(SELECT count(DISTINCT source_entry_id) FROM evidence_gaps WHERE collector='filesystem')
+    OR unresolved<>(SELECT count(*) FROM evidence_gaps WHERE collector='filesystem')
+    OR discovery_complete<>NOT EXISTS(SELECT 1 FROM evidence_gaps WHERE collector='filesystem' AND operation='enumerate')
+    OR (state='COMPLETE')<>NOT EXISTS(SELECT 1 FROM evidence_gaps WHERE collector='filesystem')))
  AND (SELECT count(*) FROM collector_runs WHERE collector='filesystem')=1;
 )sql");
 		const auto code = sqlite3_step(check.get());
 		check_sql(handle, code);
 		if (code != SQLITE_ROW || sqlite3_column_int(check.get(), 0) != 1)
 			return status_t::failure("Raw namespace accounting invariant failed");
+		query_t family(handle, "SELECT count(*) FROM collector_runs WHERE collector=?1 AND audit_id=(SELECT audit_id FROM audit_identity) AND state IN ('PENDING','COMPLETE','COMPLETE_WITH_GAPS','FAILED','STALLED');");
+		for (const auto name : required_collectors)
+		{
+			family.text(1, name);
+			const auto family_code = sqlite3_step(family.get());
+			check_sql(handle, family_code);
+			if (family_code != SQLITE_ROW || sqlite3_column_int(family.get(), 0) != 1)
+				return status_t::failure("Required collector accounting row missing, running or incompatible: " + std::string(name));
+			check_sql(handle, sqlite3_reset(family.get()));
+			check_sql(handle, sqlite3_clear_bindings(family.get()));
+		}
 		query_t migrated(handle, "SELECT state FROM collector_runs WHERE collector='registry';");
 		check_sql(handle, sqlite3_step(migrated.get()));
 		const auto* state = sqlite3_column_text(migrated.get(), 0);
@@ -186,6 +214,8 @@ SELECT
  AND (SELECT count(DISTINCT required_path) FROM registry_sources)=9
  AND NOT EXISTS(SELECT 1 FROM registry_sources s LEFT JOIN registry_hives h ON h.id=s.hive_id
    WHERE (s.state='PARSED' AND h.id IS NULL) OR (s.state<>'PARSED' AND s.hive_id IS NOT NULL))
+ AND NOT EXISTS(SELECT 1 FROM registry_sources s JOIN registry_hives h ON h.id=s.hive_id
+   LEFT JOIN fs_entries f ON f.id=s.entry_id WHERE f.id IS NULL OR h.source_path<>f.path)
  AND NOT EXISTS(SELECT 1 FROM registry_hives h LEFT JOIN registry_sources s ON s.hive_id=h.id WHERE s.id IS NULL)
  AND NOT EXISTS(SELECT 1 FROM registry_keys k LEFT JOIN registry_hives h ON h.id=k.hive_id WHERE h.id IS NULL)
  AND NOT EXISTS(SELECT 1 FROM registry_keys k LEFT JOIN registry_keys p ON p.id=k.parent_id WHERE k.parent_id IS NOT NULL AND (p.id IS NULL OR p.hive_id<>k.hive_id))
@@ -195,7 +225,13 @@ SELECT
  AND NOT EXISTS(SELECT 1 FROM collector_runs WHERE collector='registry' AND
    (state NOT IN ('COMPLETE','COMPLETE_WITH_GAPS') OR representation_complete<>1
     OR represented<>discovered OR represented<>(SELECT count(*) FROM registry_sources)
-    OR parsed<>(SELECT count(*) FROM registry_sources WHERE state='PARSED')));
+    OR parsed<>(SELECT count(*) FROM registry_sources WHERE state='PARSED')
+    OR failed<>(SELECT count(*) FROM registry_sources WHERE state IN ('PARSE_FAILED','QUERY_FAILED','ACCESS_DENIED','MISSING_REQUIRED'))
+    OR redacted<>(SELECT count(*) FROM registry_sources WHERE state IN ('REDACTED_SENSITIVE','REDACTED_POLICY'))
+    OR unsupported<>(SELECT count(*) FROM registry_sources WHERE state='UNSUPPORTED_FORMAT')
+    OR unresolved<>(SELECT count(*) FROM registry_sources WHERE state='UNRESOLVED')
+    OR discovery_complete<>((SELECT discovery_complete FROM collector_runs WHERE collector='filesystem') AND
+      NOT EXISTS(SELECT 1 FROM registry_sources WHERE state IN ('QUERY_FAILED','ACCESS_DENIED','UNRESOLVED')))));
 )sql");
 			const auto registry_code = sqlite3_step(registry.get());
 			check_sql(handle, registry_code);

@@ -186,12 +186,12 @@ status_t scan_all(const image::image_t& image, database::database_t& database,
 			}
 			evidence::query_t discovery(handle, "SELECT discovery_complete FROM collector_runs WHERE collector='filesystem';");
 			evidence::check_sql(handle, sqlite3_step(discovery.get()));
-			auto wide = platform::wide(candidate.path);
-			if (!wide.ok()) throw std::runtime_error("Stock path conversion failed");
-			auto resolved = image.resolve(wide.value());
-			const bool complete = sqlite3_column_int(discovery.get(), 0) == 1 && resolved.ok();
+			evidence::query_t reparse_parent(handle, "SELECT count(*) FROM fs_entries WHERE kind='REPARSE' AND substr(?1,1,length(comparison_key)+1)=comparison_key||'\\';");
+			reparse_parent.text(1, candidate.path);
+			evidence::check_sql(handle, sqlite3_step(reparse_parent.get()));
+			const bool complete = sqlite3_column_int(discovery.get(), 0) == 1 && sqlite3_column_int64(reparse_parent.get(), 0) == 0;
 			record(std::nullopt, &candidate, !complete ? "UNRESOLVED" : candidate.required ? "MISSING_REQUIRED" : "NOT_PRESENT", 0,
-				complete ? "Stock source not found in complete working namespace" : "Namespace discovery incomplete; absence not established");
+				complete ? "Stock source not found in complete working namespace" : "Stock path unresolved: incomplete discovery or untraversed reparse ancestor; absence not established");
 		}
 		auto status = writer.finalize();
 		if (!status.ok()) return status;

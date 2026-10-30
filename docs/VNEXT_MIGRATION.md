@@ -124,7 +124,7 @@ unimplemented. Existing semantic source accounting covers only imported registry
 not whole-image evidence or deliberate omissions. Path/size/time map binding remains
 until the next milestone. Real-model and native-viewer validation remain outstanding.
 
-## Current milestone M3: exact derived binding (prerequisite M2 at 3709c2d)
+## M3: exact derived binding (checkpoint bf8b56a; prerequisite M2 at 3709c2d)
 
 - Purpose: prevent resumable semantic output from attaching to a different raw audit.
 - Scope: reuse streaming SHA-256/platform read locks; fingerprint immutable finalized raw
@@ -158,3 +158,41 @@ until the next milestone. Real-model and native-viewer validation remain outstan
 - Checkpoint: the commit containing this update. Next: source/media catalog and original
   metadata availability, then inventory-fed deterministic domain collectors. Browser
   identity/reachability/native parity and safe export remain explicitly outstanding.
+
+## M4: publication-gate regression (locally verified)
+
+- Prerequisite: M1/M2 foundation and M3 checkpoint bf8b56a.
+- Purpose/scope: review found verify() checks filesystem accounting but not preservation
+  of every required collector row or all recorded quality-counter/gap consistency. Tighten
+  that gate before adding new collectors; otherwise a future regression could erase a
+  required pending family without failing publication. Verify missing-source queries from
+  inventory only, not fresh unguarded image path probes.
+- Non-scope: new collector families, source/media fidelity, semantic expansion or UI.
+- Invariant: every required family has one run bound to this audit; filesystem counters,
+  error states and parent paths agree with represented rows/gaps; registry probe coverage
+  and all nine stock-source queries remain accounted. Corrupted fixtures must be refused.
+- Compatibility: stricter verification of the existing v4 contract, no schema change.
+- Required validation: reproduce acceptance of a deleted required-family row, then test
+  refusal after the fix; corrupted counters/gaps/parentage; reparse-ancestor absence;
+  supported scanner build, full foundation and semantic binding fixtures.
+- Root cause reproduced: a fixture deleting the required appx collector row was accepted
+  by the old verify() gate (test failed). Centralized required-family identities and
+  verified each run's presence/audit/status; the same negative fixture is now refused.
+- Verification (2026-10-30): fresh build.cmd and test-foundation.cmd passed; negative
+  fixtures also reject inconsistent filesystem/registry counters, hidden encoding gaps,
+  invalid parent paths and missing file probes even after counts are adjusted. Junction
+  ancestors yield unresolved stock-hive queries, never false absence or followed payloads.
+  tests/source_binding.py passed again; fresh verify-only checks passed on the prior
+  prepared-tree audit and the new ISO-backed audit. No remote CI claim.
+- Fresh original-ISO-backed run: source at the local Downloads/windows.iso independently
+  hashed to 4f59662a96fc1da48c1b415d6c369d08af55ddd64e8f1c84e0166d9e50405d7a;
+  scanner held its own stable source lock and rehashed it, selected index 2, verified and
+  reused the existing cache. Audit publication passed the stronger gate; 122,063 namespace
+  entries, 98,348 registry probes/stock queries, 4 parsed hives, 53 omitted sources and
+  3,198 name-policy omissions. Integrity/FKs passed; audit PARTIAL, 15 families PENDING.
+  Wall time 12.42s on this warm-cache run is not a comparison/performance guarantee.
+  Original ACL/attribute/stream/reparse fidelity and full media catalog remain uncollected.
+- Generated evidence/logs remain ignored under build/real-m4-iso and build/real-m2;
+  none are committed. Source images, original media and protected main were not modified.
+- Next dependency: source/media catalog retention and authoritative metadata availability,
+  then indexed deterministic domain collectors. This is not migration completion.
