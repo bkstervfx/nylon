@@ -64,6 +64,13 @@ public:
 		std::string_view path = {},
 		std::optional<object_id_t> parent = std::nullopt);
 
+	result_t<object_id_t> insert_object(
+		std::string_view kind,
+		std::string_view key,
+		std::string_view name,
+		std::string_view path = {},
+		std::optional<object_id_t> parent = std::nullopt);
+
 	status_t property(
 		object_id_t object_id,
 		std::string_view key,
@@ -108,6 +115,7 @@ private:
 
 	sqlite3* database_ = nullptr;
 	statement_t object_upsert_;
+	statement_t object_insert_;
 	statement_t property_insert_;
 	statement_t edge_insert_;
 	statement_t file_metadata_upsert_;
