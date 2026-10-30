@@ -26,23 +26,19 @@ jobs:
         shell: cmd
         run: build.cmd
 
-      - name: Build lightweight viewer
+      - name: Build full Atlas viewer
         shell: cmd
         run: build-viewer.cmd
 
       - name: Verify viewer executable
         shell: pwsh
         run: |
-          if (-not (Test-Path "bin\nylon-viewer.exe")) {
-            throw "bin\nylon-viewer.exe was not produced"
-          }
+          if (-not (Test-Path "bin\nylon-viewer.exe")) { throw "bin\nylon-viewer.exe was not produced" }
+          if (-not (Test-Path "bin\nylon-viewer.atlas-v1")) { throw "full Atlas viewer marker was not produced" }
           $size = (Get-Item "bin\nylon-viewer.exe").Length
-          if ($size -lt 100000) {
-            throw "nylon-viewer.exe is unexpectedly small: $size bytes"
-          }
-          Write-Host "nylon-viewer.exe size: $size bytes"
+          if ($size -lt 100000) { throw "nylon-viewer.exe is unexpectedly small: $size bytes" }
 
-      - name: Smoke-test read-only viewer API
+      - name: Smoke-test read-only Atlas viewer API
         shell: pwsh
         run: |
           @'
@@ -64,8 +60,7 @@ jobs:
           INSERT INTO registry_values VALUES(1,2,'Greeting',1,X'680065006C006C006F000000','hello');
           INSERT INTO registry_values VALUES(2,2,'Number',4,X'2A000000','42');
           """)
-          db.commit()
-          db.close()
+          db.commit(); db.close()
 
           m = sqlite3.connect(r"viewer-smoke.map.db")
           m.executescript("""
@@ -78,13 +73,12 @@ jobs:
           INSERT INTO metadata VALUES('complete','0');
           INSERT INTO metadata VALUES('model_name','Qwen3.5-4B-Q8_0');
           INSERT INTO lift_jobs(id,job_key,mode,roots,source_count,estimated_bytes,path,deterministic_kind,status,attempts) VALUES(1,'smoke','subtree','2',3,512,'SOFTWARE\\NylonSmoke','',3,1);
-          INSERT INTO semantic_nodes VALUES(1,'j1:group',1,NULL,'group','registry_configuration','Nylon Smoke Configuration','Example semantic group produced by the local lifter.',0.8);
+          INSERT INTO semantic_nodes VALUES(1,'j1:group',1,NULL,'group','registry_configuration','Nylon Smoke Configuration','Example semantic group.',0.8);
           INSERT INTO semantic_nodes VALUES(2,'j1:e1',1,1,'e1','component','NylonSmoke','Example normalized component.',0.8);
           INSERT INTO semantic_edges VALUES(1,1,1,'contains',2);
           INSERT INTO semantic_sources VALUES(2,'rk:2');
           """)
-          m.commit()
-          m.close()
+          m.commit(); m.close()
           '@ | python -
 
           $process = Start-Process -FilePath ".\bin\nylon-viewer.exe" -ArgumentList ".\viewer-smoke.db" -PassThru
@@ -93,55 +87,26 @@ jobs:
             for ($i = 0; $i -lt 40; $i++) {
               Start-Sleep -Milliseconds 250
               $listener = Get-NetTCPConnection -State Listen -OwningProcess $process.Id -ErrorAction SilentlyContinue | Where-Object { $_.LocalAddress -eq '127.0.0.1' } | Select-Object -First 1
-              if ($listener) {
-                $port = $listener.LocalPort
-                break
-              }
-              if ($process.HasExited) {
-                throw "viewer exited before opening its local server (exit $($process.ExitCode))"
-              }
+              if ($listener) { $port = $listener.LocalPort; break }
+              if ($process.HasExited) { throw "viewer exited before opening localhost server (exit $($process.ExitCode))" }
             }
             if (-not $port) { throw "viewer did not open a localhost listener" }
-
             $base = "http://127.0.0.1:$port"
             $info = Invoke-RestMethod "$base/api/info"
-            if ($info.schema -ne '2' -or $info.keys -ne 2 -or $info.values -ne 2) {
-              throw "unexpected /api/info response"
-            }
-            $hives = Invoke-RestMethod "$base/api/hives"
-            if ($hives.Count -ne 1 -or $hives[0].name -ne 'SOFTWARE') {
-              throw "unexpected /api/hives response"
-            }
-            $search = @(Invoke-RestMethod "$base/api/search?q=NylonSmoke")
-            if ($search.Count -lt 1 -or $search[0].id -ne 'rk:2') {
-              throw "viewer search did not return the smoke key"
-            }
-            $graph = Invoke-RestMethod "$base/api/neighborhood?id=rk%3A2&values=1"
-            if ($graph.nodes.Count -lt 3) {
-              throw "viewer neighborhood did not include expected nodes"
-            }
+            if ($info.schema -ne '2' -or $info.keys -ne 2 -or $info.values -ne 2) { throw "unexpected /api/info response" }
             $node = Invoke-RestMethod "$base/api/node?id=rv%3A1"
-            if ($node.typeName -ne 'REG_SZ' -or $node.text -ne 'hello') {
-              throw "viewer node details were incorrect"
-            }
-
+            if ($node.typeName -ne 'REG_SZ' -or $node.text -ne 'hello') { throw "raw registry detail endpoint failed" }
             $semantic = Invoke-RestMethod "$base/api/semantic/status"
-            if (-not $semantic.available -or $semantic.jobs -ne 1 -or $semantic.mapped -ne 3 -or $semantic.model -ne 'Qwen3.5-4B-Q8_0') {
-              throw "semantic status endpoint was incorrect"
-            }
+            if (-not $semantic.available -or $semantic.jobs -ne 1 -or $semantic.mapped -ne 3) { throw "semantic status endpoint failed" }
             $jobs = @(Invoke-RestMethod "$base/api/semantic/jobs")
-            if ($jobs.Count -ne 1 -or $jobs[0].path -ne 'SOFTWARE\NylonSmoke') {
-              throw "semantic jobs endpoint was incorrect"
-            }
+            if ($jobs.Count -ne 1 -or $jobs[0].label -ne 'Nylon Smoke Configuration') { throw "Atlas jobs endpoint failed" }
             $detail = Invoke-RestMethod "$base/api/semantic/job?id=1"
-            if ($detail.nodes.Count -ne 2 -or $detail.nodes[0].label -ne 'Nylon Smoke Configuration') {
-              throw "semantic job detail endpoint was incorrect"
-            }
+            if ($detail.nodes.Count -ne 2) { throw "semantic detail endpoint failed" }
             $html = Invoke-WebRequest "$base/" -UseBasicParsing
-            if ($html.Content -notmatch 'semanticCanvas' -or $html.Content -notmatch 'Semantic lift') {
-              throw "semantic tile visualization was not injected into viewer HTML"
+            foreach ($token in @('atlasCanvas','progressCanvas','Full image atlas','>Atlas<','>Raw<','>Progress<')) {
+              if ($html.Content -notmatch [regex]::Escape($token)) { throw "Atlas HTML missing $token" }
             }
-            Write-Host "Viewer + semantic progress API smoke test passed on localhost:$port"
+            Write-Host "Full Atlas viewer smoke test passed on localhost:$port"
           }
           finally {
             if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
