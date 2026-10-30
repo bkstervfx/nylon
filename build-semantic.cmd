@@ -46,7 +46,7 @@ if errorlevel 1 (
 )
 
 echo [2/4] Building Nylon Semantic Lifter...
-"%CXX%" --target=x86_64-w64-mingw32 -std=c++20 -O2 -DNDEBUG -DUNICODE -D_UNICODE -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_WIN32_WINNT=0x0A00 -Wall -Wextra -Wpedantic -Werror -Wno-unused-function -fstack-protector-strong -ffunction-sections -fdata-sections -mguard=cf -fuse-ld=lld -municode -static -pthread -Wl,--gc-sections -Wl,--dynamicbase -Wl,--nxcompat -Wl,--high-entropy-va -I"%SQLITE_DIR%" -include "%ROOT%\semantic\compiler_compat.hpp" "%ROOT%\semantic\semantic.cpp" "%SQLITE_OBJ%" -lwinhttp -lbcrypt -lws2_32 -o "%BIN%\nylon-semantic.exe"
+"%CXX%" --target=x86_64-w64-mingw32 -std=c++20 -O2 -DNDEBUG -DUNICODE -D_UNICODE -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_WIN32_WINNT=0x0A00 -Wall -Wextra -Wpedantic -Werror -Wno-unused-function -fstack-protector-strong -ffunction-sections -fdata-sections -mguard=cf -fuse-ld=lld -municode -static -pthread -Wl,--gc-sections -Wl,--dynamicbase -Wl,--nxcompat -Wl,--high-entropy-va -I"%SQLITE_DIR%" -include "%ROOT%\semantic\compiler_compat.hpp" "%ROOT%\semantic\semantic_v2.cpp" "%SQLITE_OBJ%" -lwinhttp -lbcrypt -lws2_32 -o "%BIN%\nylon-semantic.exe"
 if errorlevel 1 (
     echo error: Nylon Semantic Lifter build failed.
     exit /b 1
