@@ -24,7 +24,6 @@ namespace nylon::registry
 
 struct value_t
 {
-	std::uint32_t offset = 0;
 	std::wstring name;
 	std::uint32_t type = 0;
 	std::vector<std::byte> data;
