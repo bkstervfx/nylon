@@ -1,6 +1,7 @@
 #ifndef NYLON_SEMANTIC_COMPILER_COMPAT_HPP
 #define NYLON_SEMANTIC_COMPILER_COMPAT_HPP
 
+#include <Windows.h>
 #include <sqlite3.h>
 
 #include <array>
