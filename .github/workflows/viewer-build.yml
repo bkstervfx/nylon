@@ -34,7 +34,7 @@ jobs:
         shell: pwsh
         run: |
           if (-not (Test-Path "bin\nylon-viewer.exe")) { throw "bin\nylon-viewer.exe was not produced" }
-          if (-not (Test-Path "bin\nylon-viewer.atlas-v1")) { throw "full Atlas viewer marker was not produced" }
+          if (-not (Test-Path "bin\nylon-viewer.atlas-v2")) { throw "optimized full Atlas viewer marker was not produced" }
           $size = (Get-Item "bin\nylon-viewer.exe").Length
           if ($size -lt 100000) { throw "nylon-viewer.exe is unexpectedly small: $size bytes" }
 
@@ -98,6 +98,9 @@ jobs:
             if ($node.typeName -ne 'REG_SZ' -or $node.text -ne 'hello') { throw "raw registry detail endpoint failed" }
             $semantic = Invoke-RestMethod "$base/api/semantic/status"
             if (-not $semantic.available -or $semantic.jobs -ne 1 -or $semantic.mapped -ne 3) { throw "semantic status endpoint failed" }
+            if (@($semantic.states).Count -ne 1) { throw "initial semantic status did not include full state" }
+            $semanticDelta = Invoke-RestMethod "$base/api/semantic/status"
+            if (@($semanticDelta.states).Count -ne 0) { throw "unchanged semantic status was not reduced to a delta" }
             $jobs = @(Invoke-RestMethod "$base/api/semantic/jobs")
             if ($jobs.Count -ne 1 -or $jobs[0].label -ne 'Nylon Smoke Configuration') { throw "Atlas jobs endpoint failed" }
             $detail = Invoke-RestMethod "$base/api/semantic/job?id=1"
@@ -106,7 +109,7 @@ jobs:
             foreach ($token in @('atlasCanvas','progressCanvas','Full image atlas','>Atlas<','>Raw<','>Progress<')) {
               if ($html.Content -notmatch [regex]::Escape($token)) { throw "Atlas HTML missing $token" }
             }
-            Write-Host "Full Atlas viewer smoke test passed on localhost:$port"
+            Write-Host "Full Atlas viewer + delta status smoke test passed on localhost:$port"
           }
           finally {
             if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
