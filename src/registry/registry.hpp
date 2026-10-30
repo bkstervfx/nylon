@@ -29,6 +29,12 @@ struct value_t
 	std::vector<std::byte> data;
 };
 
+struct key_ref_t
+{
+	std::uint32_t offset = 0;
+	std::wstring name;
+};
+
 class hive_t
 {
 public:
@@ -42,6 +48,10 @@ public:
 	hive_t& operator=(hive_t&&) noexcept;
 
 	static result_t<hive_t> open(const std::filesystem::path& path);
+
+	result_t<std::uint32_t> root_key_offset() const;
+	result_t<std::vector<key_ref_t>> subkeys(std::uint32_t key_offset) const;
+	result_t<std::vector<value_t>> values(std::uint32_t key_offset) const;
 
 	result_t<std::vector<std::wstring>> subkeys(std::wstring_view path) const;
 	result_t<std::vector<value_t>> values(std::wstring_view path) const;
