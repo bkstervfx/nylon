@@ -227,9 +227,6 @@ CREATE TABLE IF NOT EXISTS edges (
 	PRIMARY KEY(from_id, relation, to_id, evidence)
 ) WITHOUT ROWID;
 
-CREATE INDEX IF NOT EXISTS edge_target_index
-	ON edges(to_id, relation, from_id);
-
 CREATE TABLE IF NOT EXISTS file_metadata (
 	object_id INTEGER PRIMARY KEY,
 	size INTEGER NOT NULL,
@@ -238,9 +235,6 @@ CREATE TABLE IF NOT EXISTS file_metadata (
 	link_count INTEGER NOT NULL,
 	attributes INTEGER NOT NULL
 );
-
-CREATE INDEX IF NOT EXISTS file_identity_index
-	ON file_metadata(volume_serial, file_index);
 
 CREATE TABLE IF NOT EXISTS registry_data (
 	object_id INTEGER PRIMARY KEY,
@@ -319,7 +313,7 @@ status_t database_t::prepare_cached_statements()
 
 	status = assign(
 		registry_data_upsert_,
-		"INSERT OR REPLACE INTO registry_data(object_id, value_type, data) VALUES(?1, ?2, ?3);");
+		"INSERT INTO registry_data(object_id, value_type, data) VALUES(?1, ?2, ?3);");
 	if (!status.ok()) return status;
 
 	status = assign(
@@ -488,11 +482,23 @@ result_t<object_id_t> database_t::insert_object(
 	};
 	for (const auto& [index, value] : text_values)
 	{
-		status = bind_text(object_insert_.get(), index, value);
-		if (!status.ok())
+		if (value.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
 		{
 			reset_statement(object_insert_.get());
-			return result_t<object_id_t>::failure(status.error().message, status.error().code);
+			return result_t<object_id_t>::failure("SQLite text value is too large");
+		}
+		const char* text = value.empty() ? "" : value.data();
+		const int bind_rc = sqlite3_bind_text(
+			object_insert_.get(),
+			index,
+			text,
+			static_cast<int>(value.size()),
+			SQLITE_STATIC);
+		if (bind_rc != SQLITE_OK)
+		{
+			const auto failure = sqlite_failure(database_, "sqlite3_bind_text failed", bind_rc);
+			reset_statement(object_insert_.get());
+			return result_t<object_id_t>::failure(failure.error().message, failure.error().code);
 		}
 	}
 
@@ -671,6 +677,12 @@ status_t database_t::collector_status(
 status_t database_t::finalize_graph()
 {
 	const char* sql = R"sql(
+CREATE INDEX IF NOT EXISTS edge_target_index
+	ON edges(to_id, relation, from_id);
+
+CREATE INDEX IF NOT EXISTS file_identity_index
+	ON file_metadata(volume_serial, file_index);
+
 CREATE VIEW IF NOT EXISTS edge_view AS
 SELECT
 	e.from_id,
