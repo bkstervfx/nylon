@@ -25,10 +25,12 @@ set "LLAMA_DIR=%TOOLS%\llama\b11146"
 set "MODEL_DIR=%TOOLS%\models\qwen3.5-4b-q8_0"
 set "DOWNLOADS=%TOOLS%\downloads"
 set "RUNTIME_ZIP=%DOWNLOADS%\llama-b11146-bin-win-vulkan-x64.zip"
+set "RUNTIME_PART=%RUNTIME_ZIP%.part"
 set "RUNTIME_URL=https://github.com/ggml-org/llama.cpp/releases/download/b11146/llama-b11146-bin-win-vulkan-x64.zip"
 set "RUNTIME_SHA=55A378AA095B466979D85075234F66D7655C7A7483222AF0C006C0E55B4D7BD6"
 set "MODEL=%MODEL_DIR%\Qwen3.5-4B-Q8_0.gguf"
-set "MODEL_URL=https://huggingface.co/SoAIHQ/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q8_0.gguf"
+set "MODEL_PART=%MODEL%.part"
+set "MODEL_URL=https://huggingface.co/SoAIHQ/Qwen3.5-4B-GGUF/resolve/5f113e0/Qwen3.5-4B-Q8_0.gguf"
 set "MODEL_SHA=5B25856E42534B000B5E06D7CFC10C756931F4DC66A4CA6EF08D835BD233A833"
 set "VERIFIED=%MODEL_DIR%\.nylon-verified"
 
@@ -39,13 +41,12 @@ if not exist "%MODEL_DIR%" mkdir "%MODEL_DIR%"
 if exist "%LLAMA_DIR%\llama-server.exe" goto runtime_ready
 
 echo Downloading pinned llama.cpp Vulkan runtime b11146...
-curl.exe --fail --location --retry 3 --retry-delay 2 --output "%RUNTIME_ZIP%.part" "%RUNTIME_URL%"
+curl.exe --fail --location --retry 4 --retry-delay 2 --retry-all-errors --continue-at - --output "%RUNTIME_PART%" "%RUNTIME_URL%"
 if errorlevel 1 (
-    del /q "%RUNTIME_ZIP%.part" >nul 2>nul
-    echo error: Unable to download llama.cpp runtime.
+    echo error: Unable to download llama.cpp runtime. The partial download was kept for resume.
     exit /b 1
 )
-move /y "%RUNTIME_ZIP%.part" "%RUNTIME_ZIP%" >nul
+move /y "%RUNTIME_PART%" "%RUNTIME_ZIP%" >nul
 for /f "usebackq delims=" %%H in (`powershell.exe -NoProfile -Command "(Get-FileHash -Algorithm SHA256 -LiteralPath '%RUNTIME_ZIP%').Hash"`) do set "ACTUAL_RUNTIME_SHA=%%H"
 if /i not "!ACTUAL_RUNTIME_SHA!"=="%RUNTIME_SHA%" (
     echo error: llama.cpp runtime SHA-256 mismatch.
@@ -78,20 +79,19 @@ if exist "%MODEL%" (
     del /q "%MODEL%" >nul 2>nul
 )
 
-echo Downloading Qwen3.5-4B Q8_0 ^(about 4.6 GB^)...
-curl.exe --fail --location --retry 3 --retry-delay 2 --output "%MODEL%.part" "%MODEL_URL%"
+echo Downloading Qwen3.5-4B Q8_0 ^(about 4.6 GB, resumable^)...
+curl.exe --fail --location --retry 4 --retry-delay 2 --retry-all-errors --continue-at - --output "%MODEL_PART%" "%MODEL_URL%"
 if errorlevel 1 (
-    del /q "%MODEL%.part" >nul 2>nul
-    echo error: Unable to download the pinned semantic model.
+    echo error: Unable to download the pinned semantic model. The partial download was kept for resume.
     exit /b 1
 )
-for /f "usebackq delims=" %%H in (`powershell.exe -NoProfile -Command "(Get-FileHash -Algorithm SHA256 -LiteralPath '%MODEL%.part').Hash"`) do set "ACTUAL_MODEL_SHA=%%H"
+for /f "usebackq delims=" %%H in (`powershell.exe -NoProfile -Command "(Get-FileHash -Algorithm SHA256 -LiteralPath '%MODEL_PART%').Hash"`) do set "ACTUAL_MODEL_SHA=%%H"
 if /i not "!ACTUAL_MODEL_SHA!"=="%MODEL_SHA%" (
     echo error: semantic model SHA-256 mismatch.
-    del /q "%MODEL%.part" >nul 2>nul
+    del /q "%MODEL_PART%" >nul 2>nul
     exit /b 1
 )
-move /y "%MODEL%.part" "%MODEL%" >nul
+move /y "%MODEL_PART%" "%MODEL%" >nul
 >"%VERIFIED%" echo %MODEL_SHA%
 
 :model_ready
