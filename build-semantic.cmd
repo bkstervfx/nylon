@@ -37,6 +37,8 @@ if not exist "%SQLITE_DIR%\sqlite3.c" (
 if not exist "%BUILD%" mkdir "%BUILD%"
 if not exist "%BIN%" mkdir "%BIN%"
 set "SQLITE_OBJ=%BUILD%\semantic-sqlite3.o"
+set "SEMANTIC_MARKER=%BIN%\nylon-semantic.request-v2"
+if exist "%SEMANTIC_MARKER%" del /q "%SEMANTIC_MARKER%" >nul 2>nul
 
 echo [1/4] Compiling SQLite for Nylon Semantic Lifter...
 "%CC%" --target=x86_64-w64-mingw32 -O2 -DNDEBUG -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DQS=0 -DSQLITE_DEFAULT_MEMSTATUS=0 -fstack-protector-strong -ffunction-sections -fdata-sections -mguard=cf -c "%SQLITE_DIR%\sqlite3.c" -o "%SQLITE_OBJ%"
@@ -76,6 +78,12 @@ if not exist "%BIN%\nylon-semantic-classify.exe" (
 )
 if not exist "%BIN%\nylon-semantic-link.exe" (
     echo error: Semantic build finished without producing nylon-semantic-link.exe.
+    exit /b 1
+)
+
+>"%SEMANTIC_MARKER%" echo request-contract-v2
+if errorlevel 1 (
+    echo error: Unable to mark request-v2 semantic build.
     exit /b 1
 )
 
