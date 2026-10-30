@@ -245,6 +245,51 @@ native-viewer validation remain outstanding.
   migration remain incomplete. Next: source-identity-bound metadata-only catalog reuse
   for legacy warm caches, without applying payloads or editing those caches.
 
+## M6 — legacy-cache metadata-only catalog recovery
+
+- Purpose/prerequisite: M5 `82ec18c` proves retention/accounting but legacy real caches
+  still expose no catalog. Recover original metadata without changing their payloads.
+- Scope: separate immutable source-hash-bound catalog sidecar, populated from install
+  containers only using existing pinned tools. Reuse it across selected indexes. Do
+  not call wimlib apply; do not update legacy manifests or mutate existing sidecars.
+- Non-scope: original per-file metadata, setup/boot collection, direct container inputs,
+  payload cache policy changes, semantic/UI changes or whole-image completion.
+- Invariant: legacy image cache bytes remain unchanged; recovered XML and every index
+  enter M5 accounting; repeated compatible runs reuse sidecar without extraction/apply;
+  missing tools, extraction failure, corrupt sidecar and races remain explicit states
+  and cannot erase unrelated evidence. Existing declared-catalog failures stay failures.
+- Validation: synthetic recovery/reuse/tool-call trace, unavailable tools, extraction
+  failures, sidecar identity/hash corruption, concurrent-publication-compatible behavior,
+  full raw/binding regressions, real legacy ISO recovery and strict DB gate.
+- Compatibility: raw schema remains v5; new catalog sidecar has independent versioned
+  purpose/source/tool/hash manifest; old image caches remain accepted and untouched.
+- Implemented: catalogs-v1/<ISO SHA-256> sidecar, atomic immutable publication, stable
+  manifest/XML locks and source/tool/hash validation. Existing declared metadata errors
+  are not masked. Successful fresh XML observations survive optional cache-publication
+  failure with explicit diagnostic detail. Source-directory guard extracted unchanged
+  for image readers; publishing/sidecar-parent readers allow child writes but deny
+  deletion/reparse replacement. Entry readers retain the stronger read-only guard.
+- Diagnosed with a minimal Windows reproducer: FILE_SHARE_READ on a directory blocks
+  child publication (error 32); allowing FILE_SHARE_WRITE permits publication while
+  still denying directory replacement. This applies only to writable sidecar parents;
+  image-read directory protection was not weakened. Concurrent recovery fixtures passed
+  after separating these lock policies, including repeated full catalog-suite runs.
+- Verification (2026-10-30): fresh scanner and semantic builds, foundation/catalog/binding
+  suites passed. Catalog suite covers recovery without apply, cross-index reuse,
+  concurrent publication, unavailable tools, tool failures, sidecar hash/source mismatch,
+  reparse parent refusal, malformed metadata, cache-publication failure retaining original
+  evidence, and explicit/automatic index paths. No remote CI claim.
+- Real ISO recovery: build/real-m6-iso/output/image.db passed the strict publication gate
+  and SQLite integrity/FKs; source hash/index unchanged; 3 images, 32 fields each, exact
+  XML hash matches M5's independently extracted catalog. Original image-cache manifest
+  unchanged; recovery extracted install container metadata only, never applied payloads.
+  Subsequent fresh build/real-m6-final/output/image.db passed the same checks: 122,063
+  namespace entries, 3 images/96 catalog fields, PRESENT catalog, source_media PARTIAL,
+  14 families PENDING. Sidecar XML hash and write time unchanged during reuse. Protected
+  main still clean at e5f99e6. Overall migration remains incomplete.
+- Scoped M6 invariant satisfied by those observations. Next dependency: deterministic
+  offline reference parsing/namespace lookup before service/task/driver relationships.
+
 ## Context checkpoint / exact resume
 
 - Current verified implementation HEAD: `1096fe005c5de10d6973e40043dd03ba230f63b8`.

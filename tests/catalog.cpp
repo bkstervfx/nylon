@@ -23,6 +23,8 @@ int wmain(int argc, wchar_t** argv)
 	{
 		nylon::media::prepare_options_t options{ std::filesystem::current_path(), argv[3], std::filesystem::path(argv[3]) / L"staging", 2 };
 		if (argc == 6) options.nylon_root = argv[5];
+		if (std::wstring_view(argv[1]) == L"--prepare-index1") options.image_index = 1;
+		if (std::wstring_view(argv[1]) == L"--prepare-auto") options.image_index.reset();
 		auto prepared = nylon::media::prepare(argv[2], options);
 		if (!prepared.ok()) { std::cerr << prepared.error().message; return 1; }
 		status = database.initialize();

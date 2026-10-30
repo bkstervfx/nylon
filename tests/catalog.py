@@ -125,6 +125,7 @@ def main():
             shutil.copyfile(PROJECT / "bin" / "nylon-media-tool-fixture.exe", target)
         (wimlib / "catalog-fixture.xml").write_bytes(valid)
         cold_cache = root / "cold-cache"
+        cleanup_roots = [cold_cache]
         try:
             cold = root / "cold.db"
             run("--prepare", iso, cold_cache, cold, tools)
@@ -136,10 +137,128 @@ def main():
             evidence.close()
             run("--prepare", iso, cold_cache, root / "warm-after-cold.db", tools)
             assert (wimlib / "activity.log").read_text().splitlines() == ["info", "apply"], "Warm reuse invoked synthetic media tools again"
+
+            def legacy_cache(label, image_index=2, existing=None):
+                destination = existing or root / label
+                cleanup_roots.append(destination)
+                old = destination / "images" / source_hash / f"index-{image_index}"
+                old_config = old / "image" / "Windows" / "System32" / "config"
+                old_config.mkdir(parents=True)
+                for name in ["SYSTEM", "SOFTWARE"]:
+                    (old_config / name).write_bytes(b"unchanged legacy payload")
+                (old / "manifest.txt").write_text(base.replace("image_index=2", f"image_index={image_index}") + "iso_extractor=7zip-26.05\nwimlib=1.14.5\nwim_apply_flags=--no-acls --no-attributes --rpfix\n", encoding="utf-8")
+                for path in [old, *old.rglob("*")]:
+                    os.chmod(path, stat.S_IREAD)
+                return destination, old
+
+            def snapshot(directory):
+                return {path.relative_to(directory): (path.read_bytes(), path.stat().st_mtime_ns, path.stat().st_file_attributes) for path in directory.rglob("*") if path.is_file()}
+
+            def assert_state(path, state, xml=None):
+                evidence = sqlite3.connect(path)
+                try:
+                    assert evidence.execute("select state,xml from source_catalog").fetchone() == (state, xml), evidence.execute("select state,detail from source_catalog").fetchone()
+                    assert evidence.execute("pragma integrity_check").fetchall() == [("ok",)]
+                    assert evidence.execute("pragma foreign_key_check").fetchall() == []
+                finally:
+                    evidence.close()
+
+            recovery, old = legacy_cache("legacy-recovery")
+            original = snapshot(old)
+            run("--prepare", iso, recovery, root / "recovery.db", tools)
+            assert_state(root / "recovery.db", "PRESENT", valid)
+            assert snapshot(old) == original
+            assert (extractor / "activity.log").read_text().splitlines() == ["full-media", "containers-only"]
+            assert (wimlib / "activity.log").read_text().splitlines() == ["info", "apply", "info"]
+            run("--prepare", iso, recovery, root / "recovery-reuse.db", tools)
+            assert_state(root / "recovery-reuse.db", "PRESENT", valid)
+            legacy_cache("index1", image_index=1, existing=recovery)
+            run("--prepare-index1", iso, recovery, root / "recovery-index1.db", tools)
+            with sqlite3.connect(root / "recovery-index1.db") as evidence:
+                assert evidence.execute("select image_index from source_images where selected=1").fetchone() == (1,)
+                assert evidence.execute("select selected_name from audit_identity").fetchone() == ("other",)
+            evidence.close()
+            assert (wimlib / "activity.log").read_text().splitlines() == ["info", "apply", "info"]
+            sidecar = recovery / "catalogs-v1" / source_hash
+            sidecar_manifest = sidecar / "manifest.txt"
+            original_manifest = sidecar_manifest.read_bytes()
+            os.chmod(sidecar_manifest, stat.S_IREAD | stat.S_IWRITE)
+            sidecar_manifest.write_bytes(original_manifest.replace(source_hash.encode(), b"0" * 64))
+            os.chmod(sidecar_manifest, stat.S_IREAD)
+            run("--prepare", iso, recovery, root / "sidecar-identity-failure.db", tools)
+            assert_state(root / "sidecar-identity-failure.db", "QUERY_FAILED")
+            os.chmod(sidecar_manifest, stat.S_IREAD | stat.S_IWRITE)
+            sidecar_manifest.write_bytes(original_manifest)
+            os.chmod(sidecar_manifest, stat.S_IREAD)
+            sidecar_xml = sidecar / "catalog.xml"
+            os.chmod(sidecar_xml, stat.S_IREAD | stat.S_IWRITE)
+            sidecar_xml.write_bytes(b"corrupt catalog")
+            os.chmod(sidecar_xml, stat.S_IREAD)
+            run("--prepare", iso, recovery, root / "sidecar-hash-failure.db", tools)
+            assert_state(root / "sidecar-hash-failure.db", "QUERY_FAILED")
+            assert snapshot(old) == original
+            assert (wimlib / "activity.log").read_text().splitlines() == ["info", "apply", "info"]
+            reparse_cache, reparse_old = legacy_cache("reparse-sidecar-parent")
+            junction = reparse_cache / "catalogs-v1"
+            subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(junction), str(recovery / "catalogs-v1")], check=True, capture_output=True)
+            try:
+                run("--prepare", iso, reparse_cache, root / "sidecar-reparse.db", tools)
+                assert_state(root / "sidecar-reparse.db", "QUERY_FAILED")
+            finally:
+                os.rmdir(junction)
+            for failure, tool_directory in [("fail-extract", extractor), ("fail-info", wimlib)]:
+                failed_cache, failed_old = legacy_cache(failure)
+                unchanged = snapshot(failed_old)
+                (tool_directory / failure).touch()
+                try:
+                    output = root / f"{failure}.db"
+                    run("--prepare", iso, failed_cache, output, tools)
+                    assert_state(output, "QUERY_FAILED")
+                    assert snapshot(failed_old) == unchanged
+                    assert not (failed_cache / "catalogs-v1" / source_hash).exists()
+                finally:
+                    (tool_directory / failure).unlink()
+            invalid_cache, invalid_old = legacy_cache("recovery-malformed")
+            malformed = b"<WIM><IMAGE INDEX='2'>"
+            (wimlib / "catalog-fixture.xml").write_bytes(malformed)
+            run("--prepare", iso, invalid_cache, root / "recovery-malformed.db", tools)
+            assert_state(root / "recovery-malformed.db", "PARSE_FAILED", malformed)
+            (wimlib / "catalog-fixture.xml").write_bytes(valid)
+            blocked_cache, blocked_old = legacy_cache("publication-failure")
+            (wimlib / "block-sidecar-publish").touch()
+            try:
+                run("--prepare", iso, blocked_cache, root / "publication-failure.db", tools)
+                assert_state(root / "publication-failure.db", "PRESENT", valid)
+                evidence = sqlite3.connect(root / "publication-failure.db")
+                assert "Sidecar publication/reuse failed" in evidence.execute("select detail from source_catalog").fetchone()[0]
+                evidence.close()
+            finally:
+                (wimlib / "block-sidecar-publish").unlink()
+            single = b"<WIM><IMAGE INDEX='2'><NAME>single</NAME></IMAGE></WIM>"
+            (wimlib / "catalog-fixture.xml").write_bytes(single)
+            for label in ["auto-index", "auto-publication-failure"]:
+                auto_cache, auto_old = legacy_cache(label)
+                if label.endswith("failure"):
+                    (wimlib / "block-sidecar-publish").touch()
+                try:
+                    run("--prepare-auto", iso, auto_cache, root / f"{label}.db", tools)
+                    assert_state(root / f"{label}.db", "PRESENT", single)
+                finally:
+                    if (wimlib / "block-sidecar-publish").exists():
+                        (wimlib / "block-sidecar-publish").unlink()
+            (wimlib / "catalog-fixture.xml").write_bytes(valid)
+            concurrent_cache, concurrent_old = legacy_cache("concurrent-recovery")
+            processes = [subprocess.Popen([str(EXE), "--prepare", str(iso), str(concurrent_cache), str(root / f"concurrent-{position}.db"), str(tools)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for position in range(2)]
+            for position, process in enumerate(processes):
+                stdout, stderr = process.communicate(timeout=30)
+                assert process.returncode == 0, stdout + stderr
+                assert_state(root / f"concurrent-{position}.db", "PRESENT", valid)
+            assert (wimlib / "activity.log").read_text().splitlines().count("apply") == 1, "Metadata-only recovery applied payloads"
         finally:
-            for path in cold_cache.rglob("*"):
-                os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
-    print("PASS: catalog bytes/projection/accounting, legacy warm availability, invalid/DTD/depth/size refusal, corruption gates; existing cache unchanged")
+            for directory in cleanup_roots:
+                for path in directory.rglob("*"):
+                    os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+    print("PASS: catalog bytes/projection/accounting, cold/warm retention, legacy metadata-only recovery/reuse/concurrency, parser and corruption/failure gates; existing image caches unchanged")
 
 
 if __name__ == "__main__":

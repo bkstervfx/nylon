@@ -131,18 +131,9 @@ result_t<guarded_file_t> image_t::open_file(const std::filesystem::path& relativ
 	}
 	for (const auto& candidate : chain)
 	{
-		auto native = platform::native_path(candidate);
-		if (!native.ok()) return result_t<guarded_file_t>::failure(native.error().message, native.error().code);
-		platform::unique_handle_t handle(CreateFileW(native.value().c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
-			FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
-		if (!handle) return result_t<guarded_file_t>::failure("Cannot guard image directory", GetLastError());
-		BY_HANDLE_FILE_INFORMATION information{};
-		if (!GetFileInformationByHandle(handle.get(), &information))
-			return result_t<guarded_file_t>::failure("Cannot inspect guarded directory", GetLastError());
-		if ((information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ||
-			(information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0)
-			return result_t<guarded_file_t>::failure("Image file path traverses a reparse/non-directory entry", ERROR_ACCESS_DENIED);
-		guarded.directories.push_back(std::move(handle));
+		auto handle = platform::open_directory_read_lock(candidate);
+		if (!handle.ok()) return result_t<guarded_file_t>::failure(handle.error().message, handle.error().code);
+		guarded.directories.push_back(std::move(handle).value());
 	}
 	auto lock = platform::open_read_lock(root_ / relative);
 	if (!lock.ok()) return result_t<guarded_file_t>::failure(lock.error().message, lock.error().code);

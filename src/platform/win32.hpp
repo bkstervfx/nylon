@@ -78,6 +78,7 @@ private:
 [[nodiscard]] result_t<std::wstring> native_path(const std::filesystem::path& path);
 [[nodiscard]] result_t<DWORD> file_attributes(const std::filesystem::path& path);
 [[nodiscard]] result_t<unique_handle_t> open_read_lock(const std::filesystem::path& path);
+[[nodiscard]] result_t<unique_handle_t> open_directory_read_lock(const std::filesystem::path& path, bool allow_child_writes = false);
 
 }
 

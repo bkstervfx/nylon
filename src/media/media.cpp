@@ -666,6 +666,181 @@ result_t<prepared_input_t> cached_result(
 	return result_t<prepared_input_t>::success(std::move(prepared));
 }
 
+prepared_input_t load_catalog_sidecar(prepared_input_t prepared, const std::filesystem::path& entry)
+{
+	prepared.catalog_state = "QUERY_FAILED";
+	prepared.catalog_detail = "Source catalog sidecar identity or manifest is unreadable/incompatible.";
+	auto parent_guard = platform::open_directory_read_lock(entry.parent_path(), true);
+	if (!parent_guard.ok()) { prepared.catalog_detail = "Sidecar parent: " + parent_guard.error().message; return prepared; }
+	auto entry_guard = platform::open_directory_read_lock(entry);
+	if (!entry_guard.ok()) { prepared.catalog_detail = "Sidecar entry: " + entry_guard.error().message; return prepared; }
+	auto manifest_lock = platform::open_read_lock(entry / L"manifest.txt");
+	if (!manifest_lock.ok()) return prepared;
+	auto manifest = read_small_text(entry / L"manifest.txt");
+	if (!manifest.ok()) return prepared;
+	for (const auto& [key, expected] : {
+		std::pair<std::string_view, std::string>{ "format", "1" },
+		{ "purpose", "install-catalog-only-v1" },
+		{ "iso_sha256", prepared.iso_sha256 },
+		{ "iso_extractor", "7zip-26.05" },
+		{ "wimlib", "1.14.5" },
+		{ "immutable", "1" } })
+	{
+		if (manifest_value(manifest.value(), key) != expected) return prepared;
+	}
+	if (!manifest_value(manifest.value(), "catalog_sha256").has_value()) return prepared;
+	auto loaded = cached_result(entry, prepared.iso_sha256, prepared.image_index, prepared.image_name, true);
+	if (!loaded.ok()) return prepared;
+	auto metadata = std::move(loaded).value();
+	prepared.catalog = std::move(metadata.catalog);
+	prepared.catalog_state = std::move(metadata.catalog_state);
+	prepared.catalog_detail = "Metadata-only source sidecar: " + metadata.catalog_detail;
+	prepared.catalog_sha256 = std::move(metadata.catalog_sha256);
+	prepared.install_container_path = std::move(metadata.install_container_path);
+	if (prepared.catalog_state == "PRESENT")
+	{
+		auto name = selected_name_utf8(prepared.catalog->images, prepared.image_index);
+		if (name.ok()) prepared.image_name = std::move(name).value();
+	}
+	return prepared;
+}
+
+status_t publish_catalog_sidecar(
+	const std::filesystem::path& catalog_path,
+	const std::filesystem::path& stage,
+	const std::filesystem::path& entry,
+	std::string_view source_hash,
+	std::string_view container_path)
+{
+	std::error_code error;
+	const auto staged_entry = stage / L"catalog-entry";
+	std::filesystem::create_directories(staged_entry, error);
+	if (error) return status_t::failure("Unable to stage source catalog cache", static_cast<std::uint32_t>(error.value()));
+	std::filesystem::copy_file(catalog_path, staged_entry / L"catalog.xml", error);
+	if (error) return status_t::failure("Unable to retain source catalog", static_cast<std::uint32_t>(error.value()));
+	auto hash = platform::sha256_file(staged_entry / L"catalog.xml");
+	if (!hash.ok()) return status_t::failure(hash.error().message, hash.error().code);
+	{
+		std::ofstream manifest(staged_entry / L"manifest.txt", std::ios::binary);
+		manifest << "format=1\npurpose=install-catalog-only-v1\niso_sha256=" << source_hash
+			<< "\ncatalog_sha256=" << hash.value() << "\ninstall_container_path=" << container_path
+			<< "\niso_extractor=7zip-26.05\nwimlib=1.14.5\nimmutable=1\n";
+		manifest.flush();
+		if (!manifest) return status_t::failure("Unable to write source catalog manifest");
+	}
+	auto readonly_status = set_tree_read_only(staged_entry, true);
+	if (!readonly_status.ok()) return readonly_status;
+	std::filesystem::create_directories(entry.parent_path(), error);
+	if (error) return status_t::failure("Unable to create source catalog cache", static_cast<std::uint32_t>(error.value()));
+	auto parent_guard = platform::open_directory_read_lock(entry.parent_path(), true);
+	if (!parent_guard.ok()) return status_t::failure(parent_guard.error().message, parent_guard.error().code);
+	std::filesystem::rename(staged_entry, entry, error);
+	if (error)
+	{
+		std::error_code inspect_error;
+		if (!std::filesystem::exists(entry, inspect_error) || inspect_error)
+			return status_t::failure("Unable to atomically publish source catalog cache", static_cast<std::uint32_t>(error.value()));
+	}
+	return status_t::success();
+}
+
+prepared_input_t retain_observed_catalog(prepared_input_t prepared, catalog_t catalog, std::string container_path, std::string cache_warning)
+{
+	auto hash = platform::sha256_bytes(catalog.xml);
+	if (!hash.ok())
+	{
+		prepared.catalog_state = "QUERY_FAILED";
+		prepared.catalog_detail = hash.error().message;
+		return prepared;
+	}
+	prepared.catalog = std::move(catalog);
+	prepared.catalog_sha256 = std::move(hash).value();
+	prepared.install_container_path = std::move(container_path);
+	const bool selected = std::any_of(prepared.catalog->images.begin(), prepared.catalog->images.end(), [&](const auto& image) { return image.index == prepared.image_index; });
+	prepared.catalog_state = selected ? "PRESENT" : "UNRESOLVED";
+	prepared.catalog_detail = "Original catalog retained from metadata-only query; selected index " + std::string(selected ? "present" : "missing") + ". Sidecar publication/reuse failed: " + cache_warning;
+	if (selected)
+	{
+		auto name = selected_name_utf8(prepared.catalog->images, prepared.image_index);
+		if (name.ok()) prepared.image_name = std::move(name).value();
+	}
+	return prepared;
+}
+
+prepared_input_t recover_legacy_catalog(
+	prepared_input_t prepared,
+	const std::filesystem::path& input,
+	const prepare_options_t& options)
+{
+	if (prepared.catalog_state != "NOT_EXPOSED") return prepared;
+	const auto entry = options.cache_root / L"catalogs-v1" / std::filesystem::path(prepared.iso_sha256);
+	std::error_code error;
+	const bool exists = std::filesystem::exists(entry, error);
+	if (error)
+	{
+		prepared.catalog_state = "QUERY_FAILED";
+		prepared.catalog_detail = "Unable to inspect source catalog sidecar.";
+		return prepared;
+	}
+	if (exists) return load_catalog_sidecar(std::move(prepared), entry);
+	const auto seven_zip = options.nylon_root / L"tools" / L"media" / L"7zip" / L"7z.exe";
+	const auto wimlib = options.nylon_root / L"tools" / L"media" / L"wimlib" / L"wimlib-imagex.exe";
+	if (!regular_file_exists(seven_zip) || !regular_file_exists(wimlib))
+	{
+		prepared.catalog_detail = "Legacy cache has no catalog; portable tools unavailable for metadata-only recovery.";
+		return prepared;
+	}
+	prepared.catalog_state = "QUERY_FAILED";
+	auto stage_result = create_stage_directory(options.temp_root, prepared.iso_sha256);
+	if (!stage_result.ok()) { prepared.catalog_detail = stage_result.error().message; return prepared; }
+	const auto stage = std::move(stage_result).value();
+	cleanup_directory_t cleanup(stage);
+	const auto media_root = stage / L"media";
+	std::filesystem::create_directories(media_root, error);
+	if (error) { prepared.catalog_detail = "Unable to stage metadata-only extraction."; return prepared; }
+	auto extract = run_checked(seven_zip,
+		{ L"x", L"-y", L"-o" + media_root.native(), input.native(), L"sources/install.wim", L"sources/install.esd", L"sources/install*.swm" },
+		"7-Zip metadata-only container extraction");
+	if (!extract.ok()) { prepared.catalog_detail = extract.error().message; return prepared; }
+	auto media_guard = platform::open_directory_read_lock(media_root);
+	if (!media_guard.ok()) { prepared.catalog_detail = media_guard.error().message; return prepared; }
+	auto sources_guard = platform::open_directory_read_lock(media_root / L"sources");
+	if (!sources_guard.ok()) { prepared.catalog_detail = sources_guard.error().message; return prepared; }
+	auto install = find_install_image(media_root);
+	if (!install.ok()) { prepared.catalog_detail = install.error().message; return prepared; }
+	auto container_guard = platform::open_read_lock(install.value().primary);
+	if (!container_guard.ok()) { prepared.catalog_detail = container_guard.error().message; return prepared; }
+	const auto catalog_path = stage / L"catalog.xml";
+	auto info = run_checked(wimlib, { L"info", install.value().primary.native(), L"--extract-xml=" + catalog_path.native() }, "wimlib metadata-only catalog");
+	if (!info.ok()) { prepared.catalog_detail = info.error().message; return prepared; }
+	auto bytes = read_catalog_xml(catalog_path);
+	if (!bytes.ok()) { prepared.catalog_detail = bytes.error().message; return prepared; }
+	auto catalog = parse_catalog_bytes(bytes.value());
+	if (!catalog.ok())
+	{
+		auto hash = platform::sha256_bytes(bytes.value());
+		if (!hash.ok()) { prepared.catalog_detail = hash.error().message; return prepared; }
+		prepared.catalog_state = "PARSE_FAILED";
+		prepared.catalog_detail = catalog.error().message;
+		prepared.catalog_sha256 = std::move(hash).value();
+		prepared.catalog.emplace();
+		prepared.catalog->xml = std::move(bytes).value();
+		return prepared;
+	}
+	auto relative = platform::utf8(install.value().primary.lexically_relative(media_root).generic_wstring());
+	if (!relative.ok()) { prepared.catalog_detail = relative.error().message; return prepared; }
+	auto publish = publish_catalog_sidecar(catalog_path, stage, entry, prepared.iso_sha256, relative.value());
+	std::string cache_warning;
+	if (publish.ok())
+	{
+		auto loaded = load_catalog_sidecar(prepared, entry);
+		if (loaded.catalog_state == "PRESENT" || loaded.catalog_state == "UNRESOLVED") return loaded;
+		cache_warning = loaded.catalog_detail;
+	}
+	else cache_warning = publish.error().message;
+	return retain_observed_catalog(std::move(prepared), std::move(catalog).value(), std::move(relative).value(), std::move(cache_warning));
+}
+
 }
 
 result_t<prepared_input_t> prepare(
@@ -726,12 +901,14 @@ result_t<prepared_input_t> prepare(
 		}
 		if (validation.value().has_value())
 		{
-			return cached_result(
+			auto cached = cached_result(
 				entry,
 				std::move(iso_sha256),
 				*options.image_index,
 				std::move(*validation.value()),
 				true);
+			if (!cached.ok()) return cached;
+			return result_t<prepared_input_t>::success(recover_legacy_catalog(std::move(cached).value(), input, options));
 		}
 	}
 
@@ -830,12 +1007,27 @@ result_t<prepared_input_t> prepare(
 	}
 	if (existing.value().has_value())
 	{
-		return cached_result(
+		auto cached = cached_result(
 			final_entry,
 			std::move(iso_sha256),
 			image_index,
 			existing.value()->empty() ? std::move(image_name) : std::move(*existing.value()),
 			true);
+		if (!cached.ok() || cached.value().catalog_state != "NOT_EXPOSED") return cached;
+		auto prepared = std::move(cached).value();
+		auto relative = platform::utf8(install.primary.lexically_relative(media_root).generic_wstring());
+		if (!relative.ok()) return result_t<prepared_input_t>::failure(relative.error().message, relative.error().code);
+		const auto sidecar = options.cache_root / L"catalogs-v1" / std::filesystem::path(prepared.iso_sha256);
+		auto publish = publish_catalog_sidecar(catalog_path, stage, sidecar, prepared.iso_sha256, relative.value());
+		std::string cache_warning;
+		if (publish.ok())
+		{
+			auto loaded = load_catalog_sidecar(prepared, sidecar);
+			if (loaded.catalog_state == "PRESENT" || loaded.catalog_state == "UNRESOLVED") return result_t<prepared_input_t>::success(std::move(loaded));
+			cache_warning = loaded.catalog_detail;
+		}
+		else cache_warning = publish.error().message;
+		return result_t<prepared_input_t>::success(retain_observed_catalog(std::move(prepared), std::move(catalog_result).value(), std::move(relative).value(), std::move(cache_warning)));
 	}
 
 	const auto entry_stage = stage / L"cache-entry";

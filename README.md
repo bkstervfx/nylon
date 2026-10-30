@@ -21,9 +21,14 @@ Newly prepared ISO caches retain the original install-container XML catalog and 
 SHA-256. `source_catalog`, `source_images` and `source_image_fields` preserve exact XML,
 all exposed indexes and ordered/repeated image metadata fields (including unknown fields).
 The bounded XML projection prohibits DTDs/external resolution; unsupported/malformed
-retained catalogs have explicit failure states, not false absence. Legacy warm caches
-are reused unchanged and explicitly report catalog metadata `NOT_EXPOSED`; no payload
-reapplication or in-place cache upgrade is performed merely to add metadata. Source-media
+retained catalogs have explicit failure states, not false absence. Legacy warm image
+caches are reused unchanged. When pinned media tools are available, Nylon queries only
+install-container metadata and retains a separate immutable catalog under
+`%LOCALAPPDATA%\Temp\nylon\cache\catalogs-v1\<iso-sha256>`; subsequent indexed runs reuse
+it without media extraction or payload application. Missing tools leave `NOT_EXPOSED`;
+query/parse/sidecar-integrity failures remain explicit. An optional cache-publication
+failure does not discard a successfully observed original catalog from the audit.
+No payload reapplication or in-place image-cache upgrade occurs merely to add metadata. Source-media
 collection remains `PARTIAL`: setup/boot inventory and original per-file metadata are
 not yet collected. Catalog interpretation is not whole-image coverage.
 
@@ -40,7 +45,7 @@ whole-image completion. Raw staging uses rollback journaling to isolate failed h
 
 After `build.cmd`, `test-foundation.cmd` runs deterministic namespace and registry fixtures.
 `test-catalog.cmd` exercises catalog retention/accounting, parser limits and synthetic
-cold/warm cache paths; synthetic tool fixtures are not real ISO/WIM validation.
+cold/warm/recovery/concurrent cache paths; synthetic tool fixtures are not real ISO/WIM validation.
 
 ## Build
 

@@ -7,7 +7,10 @@ int wmain(int argc, wchar_t** argv)
 	const auto executable = std::filesystem::path(argv[0]);
 	if (executable.filename() == L"7z.exe")
 	{
-		if (argc != 5 || std::wstring_view(argv[1]) != L"x" || std::wstring_view(argv[2]) != L"-y" || !std::wstring_view(argv[3]).starts_with(L"-o")) return 2;
+		if ((argc != 5 && argc != 8) || std::wstring_view(argv[1]) != L"x" || std::wstring_view(argv[2]) != L"-y" || !std::wstring_view(argv[3]).starts_with(L"-o")) return 2;
+		if (argc == 8 && (std::wstring_view(argv[5]) != L"sources/install.wim" || std::wstring_view(argv[6]) != L"sources/install.esd" || std::wstring_view(argv[7]) != L"sources/install*.swm")) return 2;
+		std::ofstream(executable.parent_path() / L"activity.log", std::ios::app) << (argc == 8 ? "containers-only\n" : "full-media\n");
+		if (std::filesystem::exists(executable.parent_path() / L"fail-extract")) return 17;
 		const auto media = std::filesystem::path(std::wstring_view(argv[3]).substr(2));
 		std::filesystem::create_directories(media / L"sources");
 		std::ofstream(media / L"sources" / L"install.wim") << "synthetic container; not a WIM";
@@ -18,6 +21,12 @@ int wmain(int argc, wchar_t** argv)
 	if (std::wstring_view(argv[1]) == L"info")
 	{
 		if (argc != 4 || !std::wstring_view(argv[3]).starts_with(L"--extract-xml=")) return 2;
+		if (std::filesystem::exists(executable.parent_path() / L"fail-info")) return 18;
+		if (std::filesystem::exists(executable.parent_path() / L"block-sidecar-publish"))
+		{
+			const auto stage = std::filesystem::path(std::wstring_view(argv[3]).substr(14)).parent_path();
+			std::ofstream(stage.parent_path().parent_path() / L"catalogs-v1") << "synthetic publication failure";
+		}
 		std::filesystem::copy_file(executable.parent_path() / L"catalog-fixture.xml", std::filesystem::path(std::wstring_view(argv[3]).substr(14)));
 		return 0;
 	}
