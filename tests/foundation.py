@@ -157,6 +157,9 @@ def main():
         assert result.execute("select operation,state from evidence_gaps where collector='source_media' order by operation").fetchall() == [("image_catalog", "NOT_EXPOSED"), ("remaining_source_media", "UNRESOLVED")]
         identity = result.execute("select audit_id from audit_identity").fetchone()[0]
         result.close()
+        assert_refused(workspace / "namespace.db", workspace / "wrong-comparison.db", "UPDATE fs_entries SET comparison_key='WRONG' WHERE path='hardlink.bin';")
+        assert_refused(workspace / "namespace.db", workspace / "wrong-utf16.db", "UPDATE fs_entries SET path_utf16=zeroblob(3) WHERE path='hardlink.bin';")
+        assert_refused(workspace / "namespace.db", workspace / "wrong-readable-path.db", "UPDATE fs_entries SET path='different.bin' WHERE path='hardlink.bin';")
         assert_refused(workspace / "namespace.db", workspace / "wrong-parent.db", "UPDATE fs_entries SET parent_id=(SELECT id FROM fs_entries WHERE path='empty') WHERE path='hardlink.bin';")
         repeated = collect(root, workspace / "repeated.db")
         assert identity != repeated.execute("select audit_id from audit_identity").fetchone()[0]

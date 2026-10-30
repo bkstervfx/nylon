@@ -290,6 +290,47 @@ native-viewer validation remain outstanding.
 - Scoped M6 invariant satisfied by those observations. Next dependency: deterministic
   offline reference parsing/namespace lookup before service/task/driver relationships.
 
+## M7 — conservative offline reference boundary
+
+- Purpose/prerequisite: M1 namespace and M6 catalog are usable; no active src resolver
+  exists (source search). Domain collectors need evidence-backed paths without host
+  expansion, basename guessing or accidental reparse traversal (critical edge case 4).
+- Scope: versioned reusable path/quoted-command parser, explicit offline Windows root
+  and relative-base context; inventory-only lookup with parent discovery/encoding states,
+  case ambiguity and reparse barriers. Reuse the namespace comparison-key algorithm.
+- Non-scope: service/task/driver collector completion, command-wrapper/module semantics,
+  unknown variables/drives/NT-device mappings, inferred dependencies, model/UI work.
+- Invariant: raw UTF-16 reference retained; PRESENT requires exactly one matching FILE
+  through non-reparse directory ancestors; NOT_PRESENT requires complete discovery and
+  encoding accounting of the relevant parent. Query failure/ambiguity/incomplete ancestry
+  never become absence. No image/host payload is opened and no raw DB row is modified.
+- Required validation: Unicode/long paths, known and unknown variables, explicit relative
+  bases, quoting/unquoted ambiguity, malformed input, root escapes, absent/partial parents,
+  reparses/case collisions/query errors; real-audit known references with unchanged DB hash;
+  supported scanner build and existing fixture regressions.
+- Compatibility: parser version offline-reference-v1; no new persisted schema/table or
+  collector-status change. Future domain collectors must persist raw provenance/results.
+- New evidence requires strengthening the old publication gate: a focused corruption
+  fixture changed comparison_key and the existing gate accepted it. M7 lookup depends
+  on those indexes, so the gate now streams original UTF-16 identities and checks exact
+  readable/comparison projections and encoding states. This is a newly demonstrated
+  invariant gap, not a restart of M1/M4 or a source/schema reinterpretation.
+- Focused parser fixture also reproduced lexical '..' normalization erasing a reparse
+  barrier and falsely resolving a file. Parent traversal now stays UNRESOLVED rather
+  than being collapsed. Mixed-separator offline bases are normalized consistently;
+  their prior false-NOT_PRESENT case was reproduced before the fix.
+- Verification (2026-10-30): fresh scanner/semantic builds and foundation, catalog,
+  reference and semantic-binding suites passed. New comparison-key, odd UTF-16 and
+  readable-path corruption fixtures are rejected. Existing Unicode/invalid-UTF-16,
+  long-path and registry rollback/redaction fixtures still pass. Read-only reference
+  checks on build/real-m6-final/output/image.db and a fresh build/real-m7-iso/output/image.db
+  resolve the observed kernel file and retain both reparse barriers as unresolved;
+  exact DB hashes unchanged. Fresh M7 scan and strict publication verification passed.
+- Scoped helper/gate invariant satisfied by those observations. No service/task/driver
+  collector completion, general shell-command parsing, performance comparison, remote
+  CI or whole-image completion is claimed. Next: offline control-set selection evidence
+  as the prerequisite to service-definition/relationship collection.
+
 ## Context checkpoint / exact resume
 
 - Current verified implementation HEAD: `1096fe005c5de10d6973e40043dd03ba230f63b8`.

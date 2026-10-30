@@ -5,11 +5,47 @@
 #include <bcrypt.h>
 
 #include <array>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 
+#include "../platform/win32.hpp"
+
 namespace nylon::evidence
 {
+
+namespace
+{
+
+void verify_namespace_keys(sqlite3* database)
+{
+	query_t entries(database, "SELECT path_utf16,path,comparison_key,encoding_state FROM fs_entries ORDER BY id;");
+	int code = SQLITE_OK;
+	while ((code = sqlite3_step(entries.get())) == SQLITE_ROW)
+	{
+		const auto size = sqlite3_column_bytes(entries.get(), 0);
+		if (sqlite3_column_type(entries.get(), 0) != SQLITE_BLOB || size % sizeof(wchar_t) != 0)
+			throw std::runtime_error("Invalid raw UTF-16 namespace identity");
+		std::wstring path(static_cast<std::size_t>(size) / sizeof(wchar_t), L'\0');
+		if (size) std::memcpy(path.data(), sqlite3_column_blob(entries.get(), 0), static_cast<std::size_t>(size));
+		auto text = platform::utf8(path);
+		auto key = platform::path_comparison_key(path);
+		auto matches = [&](int column, const result_t<std::string>& expected)
+		{
+			if (!expected.ok()) return sqlite3_column_type(entries.get(), column) == SQLITE_NULL;
+			if (sqlite3_column_type(entries.get(), column) != SQLITE_TEXT) return false;
+			const auto* raw = sqlite3_column_text(entries.get(), column);
+			return std::string_view(reinterpret_cast<const char*>(raw), static_cast<std::size_t>(sqlite3_column_bytes(entries.get(), column))) == expected.value();
+		};
+		const auto* state = sqlite3_column_text(entries.get(), 3);
+		if (!matches(1, text) || !matches(2, key) || !state ||
+			std::string_view(reinterpret_cast<const char*>(state)) != (text.ok() && key.ok() ? "PRESENT" : "UNRESOLVED"))
+			throw std::runtime_error("Namespace text/comparison key does not match original UTF-16 identity");
+	}
+	check_sql(database, code);
+}
+
+}
 
 status_t initialize(database::database_t& database, const media::prepared_input_t& input)
 {
@@ -159,6 +195,7 @@ status_t verify(database::database_t& database)
 	try
 	{
 		auto* handle = database.native_handle();
+		verify_namespace_keys(handle);
 		query_t check(handle, R"sql(
 SELECT
  (SELECT count(*) FROM audit_identity WHERE schema_version=5)=1

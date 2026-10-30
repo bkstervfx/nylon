@@ -47,6 +47,14 @@ After `build.cmd`, `test-foundation.cmd` runs deterministic namespace and regist
 `test-catalog.cmd` exercises catalog retention/accounting, parser limits and synthetic
 cold/warm/recovery/concurrent cache paths; synthetic tool fixtures are not real ISO/WIM validation.
 
+`test-references.cmd` validates the reusable `offline-reference-v1` boundary for future
+domain collectors: explicit offline roots/bases, literal paths/quoted targets and
+inventory-only file lookup. Unknown drive/environment mappings, unquoted command
+ambiguity, parent traversal, reparses and incomplete namespace ancestry stay unresolved;
+host search paths/environment are never used. This helper does not implement the pending
+service/task/driver collectors. Publication also checks readable/comparison paths against
+their original UTF-16 identities before downstream indexed lookups can rely on them.
+
 ## Build
 
 No Visual Studio, MSVC, CMake, Ninja or PowerShell script is required.

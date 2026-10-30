@@ -218,23 +218,9 @@ private:
 		auto text = platform::utf8(relative);
 		if (text.ok()) insert_.text(2, text.value());
 		insert_.blob(3, relative.data(), relative.size() * sizeof(wchar_t));
-		bool normalized = false;
-		if (relative.empty()) { insert_.text(4, ""); normalized = true; }
-		else
-		{
-			const int size = LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_UPPERCASE,
-				relative.data(), static_cast<int>(relative.size()), nullptr, 0, nullptr, nullptr, 0);
-			if (size > 0)
-			{
-				std::wstring key(static_cast<std::size_t>(size), L'\0');
-				if (LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_UPPERCASE, relative.data(),
-					static_cast<int>(relative.size()), key.data(), size, nullptr, nullptr, 0) > 0)
-				{
-					auto converted = platform::utf8(key);
-					if (converted.ok()) { insert_.text(4, converted.value()); normalized = true; }
-				}
-			}
-		}
+		auto key = platform::path_comparison_key(relative);
+		const bool normalized = key.ok();
+		if (normalized) insert_.text(4, key.value());
 		insert_.text(5, reparse ? "REPARSE" : directory ? "DIRECTORY" : "FILE");
 		insert_.text(6, text.ok() && normalized ? "PRESENT" : "UNRESOLVED");
 		insert_.text(7, directory && !reparse ? "PENDING" : "NOT_APPLICABLE");

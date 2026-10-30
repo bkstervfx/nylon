@@ -41,6 +41,10 @@ jobs:
         shell: cmd
         run: test-catalog.cmd
 
+      - name: Verify offline reference resolution
+        shell: cmd
+        run: test-references.cmd
+
       - name: Smoke-test ISO hashing path
         shell: cmd
         run: |
