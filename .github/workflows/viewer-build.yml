@@ -66,6 +66,25 @@ jobs:
           """)
           db.commit()
           db.close()
+
+          m = sqlite3.connect(r"viewer-smoke.map.db")
+          m.executescript("""
+          CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+          CREATE TABLE lift_jobs(id INTEGER PRIMARY KEY,job_key TEXT NOT NULL UNIQUE,mode TEXT NOT NULL,parent_context_id INTEGER,roots TEXT NOT NULL,value_offset INTEGER NOT NULL DEFAULT 0,value_limit INTEGER NOT NULL DEFAULT 0,source_count INTEGER NOT NULL,estimated_bytes INTEGER NOT NULL,path TEXT NOT NULL,deterministic_kind TEXT NOT NULL DEFAULT '',status INTEGER NOT NULL DEFAULT 0,attempts INTEGER NOT NULL DEFAULT 0,input_hash TEXT NOT NULL DEFAULT '',error TEXT NOT NULL DEFAULT '',started_ms INTEGER,completed_ms INTEGER);
+          CREATE TABLE semantic_nodes(id INTEGER PRIMARY KEY,stable_key TEXT NOT NULL UNIQUE,job_id INTEGER NOT NULL,parent_id INTEGER,local_id TEXT NOT NULL,kind TEXT NOT NULL,label TEXT NOT NULL,summary TEXT NOT NULL,confidence REAL NOT NULL);
+          CREATE TABLE semantic_edges(id INTEGER PRIMARY KEY,job_id INTEGER NOT NULL,source_id INTEGER NOT NULL,relation TEXT NOT NULL,target_id INTEGER NOT NULL);
+          CREATE TABLE semantic_sources(semantic_id INTEGER NOT NULL,source_ref TEXT NOT NULL,PRIMARY KEY(semantic_id,source_ref));
+          CREATE TABLE unresolved(id INTEGER PRIMARY KEY,job_id INTEGER NOT NULL,text TEXT NOT NULL);
+          INSERT INTO metadata VALUES('complete','0');
+          INSERT INTO metadata VALUES('model_name','Qwen3.5-4B-Q8_0');
+          INSERT INTO lift_jobs(id,job_key,mode,roots,source_count,estimated_bytes,path,deterministic_kind,status,attempts) VALUES(1,'smoke','subtree','2',3,512,'SOFTWARE\\NylonSmoke','',3,1);
+          INSERT INTO semantic_nodes VALUES(1,'j1:group',1,NULL,'group','registry_configuration','Nylon Smoke Configuration','Example semantic group produced by the local lifter.',0.8);
+          INSERT INTO semantic_nodes VALUES(2,'j1:e1',1,1,'e1','component','NylonSmoke','Example normalized component.',0.8);
+          INSERT INTO semantic_edges VALUES(1,1,1,'contains',2);
+          INSERT INTO semantic_sources VALUES(2,'rk:2');
+          """)
+          m.commit()
+          m.close()
           '@ | python -
 
           $process = Start-Process -FilePath ".\bin\nylon-viewer.exe" -ArgumentList ".\viewer-smoke.db" -PassThru
@@ -105,7 +124,24 @@ jobs:
             if ($node.typeName -ne 'REG_SZ' -or $node.text -ne 'hello') {
               throw "viewer node details were incorrect"
             }
-            Write-Host "Viewer API smoke test passed on localhost:$port"
+
+            $semantic = Invoke-RestMethod "$base/api/semantic/status"
+            if (-not $semantic.available -or $semantic.jobs -ne 1 -or $semantic.mapped -ne 3 -or $semantic.model -ne 'Qwen3.5-4B-Q8_0') {
+              throw "semantic status endpoint was incorrect"
+            }
+            $jobs = @(Invoke-RestMethod "$base/api/semantic/jobs")
+            if ($jobs.Count -ne 1 -or $jobs[0].path -ne 'SOFTWARE\NylonSmoke') {
+              throw "semantic jobs endpoint was incorrect"
+            }
+            $detail = Invoke-RestMethod "$base/api/semantic/job?id=1"
+            if ($detail.nodes.Count -ne 2 -or $detail.nodes[0].label -ne 'Nylon Smoke Configuration') {
+              throw "semantic job detail endpoint was incorrect"
+            }
+            $html = Invoke-WebRequest "$base/" -UseBasicParsing
+            if ($html.Content -notmatch 'semanticCanvas' -or $html.Content -notmatch 'Semantic lift') {
+              throw "semantic tile visualization was not injected into viewer HTML"
+            }
+            Write-Host "Viewer + semantic progress API smoke test passed on localhost:$port"
           }
           finally {
             if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
