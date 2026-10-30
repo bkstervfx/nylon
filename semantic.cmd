@@ -10,7 +10,7 @@ set "CLASSIFIER=%ROOT%\bin\nylon-semantic-classify.exe"
 set "LINKER=%ROOT%\bin\nylon-semantic-link.exe"
 set "SEMANTIC_MARKER=%ROOT%\bin\nylon-semantic.performance-v1"
 set "VIEWER=%ROOT%\bin\nylon-viewer.exe"
-set "VIEWER_MARKER=%ROOT%\bin\nylon-viewer.atlas-v1"
+set "VIEWER_MARKER=%ROOT%\bin\nylon-viewer.atlas-v2"
 
 if not exist "%SEMANTIC%" goto build_semantic
 if not exist "%CLASSIFIER%" goto build_semantic
@@ -29,7 +29,7 @@ if not exist "%VIEWER_MARKER%" goto build_viewer
 goto viewer_built
 
 :build_viewer
-echo Nylon Viewer is missing or predates the full Atlas interface. Rebuilding it now...
+echo Nylon Viewer is missing or predates the optimized full Atlas interface. Rebuilding it now...
 call "%ROOT%\build-viewer.cmd"
 if errorlevel 1 exit /b 1
 
