@@ -8,7 +8,7 @@ Current implementation covers the project foundation, a selected-image working-n
 inventory, direct binary registry-hive auditing and portable Windows ISO preparation.
 This is not yet exhaustive whole-image domain collection.
 
-The raw schema v3 foundation records `audit_identity`, `collector_runs`, `fs_entries`,
+The raw schema v4 foundation records `audit_identity`, `collector_runs`, `fs_entries`,
 `evidence_gaps` and `source_metadata_availability`. Filesystem discovery/representation
 are separate from parsing and from all other required collector families, which remain
 pending until migrated. Paths preserve exact UTF-16 identity plus readable/comparison
@@ -16,6 +16,17 @@ forms where conversion succeeds. Reparse entries are recorded without following 
 Working-view metadata is not original source metadata; uncollected original fields are
 explicitly `NOT_EXPOSED`. Expanded-tree source identity is explicitly weaker/run-scoped,
 not a content hash. Existing audits require a fresh staged scan, not an in-place upgrade.
+
+Registry discovery now consumes that inventory rather than recursively walking image
+directories again. Every file-header probe and stock-hive query is accounted in
+`registry_sources`; parsed hives link to filesystem entries using image-relative paths.
+SAM/SECURITY payloads are not opened, user/arbitrary discovered hives are omitted by
+default pending a reviewed policy, and sensitive-name omissions are recorded in
+`registry_omissions` without retained raw value bytes. This conservative label policy is
+not proof that arbitrary configuration is secret-free or that a portable export is safe.
+Malformed/dirty/missing hives no longer erase unrelated collected evidence. Successful
+publication can therefore be a `PARTIAL` audit with explicit collector gaps; it is not
+whole-image completion. Raw staging uses rollback journaling to isolate failed hives.
 
 After `build.cmd`, `test-foundation.cmd` runs deterministic namespace and registry fixtures.
 

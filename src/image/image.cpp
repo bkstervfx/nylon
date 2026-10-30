@@ -97,17 +97,6 @@ result_t<image_t> image_t::open(std::filesystem::path root)
 	}
 
 	image_t image(root);
-	auto config_result = image.resolve(L"Windows\\System32\\config");
-	if (!config_result.ok())
-	{
-		return result_t<image_t>::failure(config_result.error().message, config_result.error().code);
-	}
-	const auto config = config_result.value();
-	if (!std::filesystem::is_directory(config, error) || error)
-	{
-		return result_t<image_t>::failure("Image root does not contain Windows\\System32\\config");
-	}
-
 	auto kernel_result = image.resolve(L"Windows\\System32\\ntoskrnl.exe");
 	if (!kernel_result.ok())
 	{
@@ -119,24 +108,6 @@ result_t<image_t> image_t::open(std::filesystem::path root)
 		return result_t<image_t>::failure("Image root does not contain Windows\\System32\\ntoskrnl.exe");
 	}
 
-	for (const auto* name : { L"SOFTWARE", L"SYSTEM", L"COMPONENTS", L"DEFAULT", L"SAM", L"SECURITY" })
-	{
-		auto hive_result = image.resolve(std::filesystem::path(L"Windows\\System32\\config") / name);
-		if (!hive_result.ok())
-		{
-			return result_t<image_t>::failure(hive_result.error().message, hive_result.error().code);
-		}
-
-		error.clear();
-		if (!std::filesystem::is_regular_file(hive_result.value(), error) || error)
-		{
-			auto narrow = platform::utf8(name);
-			return result_t<image_t>::failure(
-				"Image root is missing required registry hive " +
-				(narrow.ok() ? narrow.value() : std::string("<unknown>")),
-				error.value());
-		}
-	}
 
 	return result_t<image_t>::success(std::move(image));
 }
@@ -144,6 +115,39 @@ result_t<image_t> image_t::open(std::filesystem::path root)
 const std::filesystem::path& image_t::root() const noexcept
 {
 	return root_;
+}
+
+result_t<guarded_file_t> image_t::open_file(const std::filesystem::path& relative) const
+{
+	if (relative.empty() || relative.has_root_path() || escapes_root(relative))
+		return result_t<guarded_file_t>::failure("Invalid image-relative file path", ERROR_INVALID_PARAMETER);
+	guarded_file_t guarded;
+	auto directory = root_;
+	std::vector<std::filesystem::path> chain{ directory };
+	for (const auto& component : relative.parent_path())
+	{
+		directory /= component;
+		chain.push_back(directory);
+	}
+	for (const auto& candidate : chain)
+	{
+		auto native = platform::native_path(candidate);
+		if (!native.ok()) return result_t<guarded_file_t>::failure(native.error().message, native.error().code);
+		platform::unique_handle_t handle(CreateFileW(native.value().c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+			FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+		if (!handle) return result_t<guarded_file_t>::failure("Cannot guard image directory", GetLastError());
+		BY_HANDLE_FILE_INFORMATION information{};
+		if (!GetFileInformationByHandle(handle.get(), &information))
+			return result_t<guarded_file_t>::failure("Cannot inspect guarded directory", GetLastError());
+		if ((information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ||
+			(information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0)
+			return result_t<guarded_file_t>::failure("Image file path traverses a reparse/non-directory entry", ERROR_ACCESS_DENIED);
+		guarded.directories.push_back(std::move(handle));
+	}
+	auto lock = platform::open_read_lock(root_ / relative);
+	if (!lock.ok()) return result_t<guarded_file_t>::failure(lock.error().message, lock.error().code);
+	guarded.file = std::move(lock).value();
+	return result_t<guarded_file_t>::success(std::move(guarded));
 }
 
 result_t<std::filesystem::path> image_t::resolve(const std::filesystem::path& relative) const

@@ -41,7 +41,7 @@ are not fresh evidence. Requested database-design skill is unavailable; no extra
 6. Native Atlas parity, retire browser; safe sharded export.
 7. Separate modification and source/target retained-function verification.
 
-## Current milestone M1: raw foundation
+## M1: raw foundation (checkpoint 49b5f87)
 
 - Purpose/prerequisite: share discovery before domain parsing; audit gate passed.
 - Scope: run-specific identity with source/index/schema/policies, dedicated entries,
@@ -79,7 +79,47 @@ are not fresh evidence. Requested database-design skill is unavailable; no extra
   accounting and cryptographic raw-to-map binding. Preserve existing REGF parser/bulk writer.
   Define its exact scope/invariant before implementation; do not claim whole-image completion.
 
+## M2: inventory registry (locally verified; prerequisite M1 at 49b5f87)
+
+- Purpose: consume shared inventory for registry discovery without losing independent evidence.
+- Scope: stream file-header probes from fs_entries, preserve probe/error accounting and
+  canonical hive links, omit SAM/SECURITY and unreviewed hives, isolate per-hive failure,
+  remove redundant registry directory walks. Preserve REGF parsing and batched writes.
+- Non-scope: credential extraction, universal export safety, new semantic ontology/UI,
+  authoritative original WIM metadata, recovery/replay of dirty hives.
+- Invariant: every inventory file probe or required missing-hive query has an explicit
+  terminal result; each parsed hive links to its filesystem source; known sensitive and
+  unreviewed hive payloads are never imported; a failed hive cannot leave orphaned partial
+  rows or erase namespace/other-hive evidence. Missing is inferred only after complete
+  namespace discovery; otherwise unresolved. Required failures publish a partial audit.
+- Compatibility: fresh raw schema v4, registry policy versioned; existing raw audits not
+  upgraded. Use disk-backed SQLite rollback journaling for per-hive savepoints (OFF cannot
+  guarantee rollback); staging remains unpublished until integrity/accounting passes.
+- Verification required: supported build; fresh fixture tests for redaction, arbitrary-path
+  REGF probes, missing/dirty/malformed hives, partial-hive rollback, namespace denial,
+  parent/source/count invariants and registry semantic regression. Real-image raw run
+  if available, excluding sensitive payload ingestion. Derived-binding work follows.
+- Verification (2026-10-30): build.cmd and test-foundation.cmd exited 0. Fixtures prove
+  canonical source links; sensitive/unreviewed omission; dirty/missing source accounting;
+  rollback of a malformed hive after >256 keys/values forced real batch writes; namespace
+  denial does not erase unrelated evidence and cannot establish missing-hive absence;
+  name-based value omission; SQLite integrity/FKs. Portable CI startup expectations now
+  assert explicit partial publication instead of the obsolete abort-on-invalid-hive rule.
+- Fresh prepared-tree scanner observation: 24.32s; filesystem 122,063/122,063;
+  registry probe/query accounting 98,348/98,348 (98,345 files plus 3 absent optional paths).
+  4 stock hives parsed, 2 sensitive sources omitted, 51 unreviewed sources omitted,
+  3 optional sources absent, 98,288 non-REGF probes. 335,063 imported keys, 597,504 imported
+  values and 3,198 explicit sensitive-name omissions. Integrity/FKs and source/accounting
+  publication invariants passed. This is an expanded prepared-cache observation, not a
+  fresh original-media identity/fidelity validation or proof of secret-free export.
+- Checkpoint: the commit containing this update. Next dependency: cryptographic raw/map
+  binding and refusal of incompatible classifier/linker input, retaining semantic behavior.
+
 ## Risks/gaps
 
 No raw resume yet. Original ADS/EA/security/reparse fidelity/catalog missing. Namespace
 success alone cannot prove whole-image domain/semantic completion.
+Conservative omission is not universal secret detection. Safe external export remains
+unimplemented. Existing semantic source accounting covers only imported registry rows,
+not whole-image evidence or deliberate omissions. Path/size/time map binding remains
+until the next milestone. Real-model and native-viewer validation remain outstanding.

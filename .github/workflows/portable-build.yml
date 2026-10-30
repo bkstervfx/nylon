@@ -140,12 +140,27 @@ jobs:
           type nul > smoke\Windows\System32\ntoskrnl.exe
           for %%H in (SOFTWARE SYSTEM COMPONENTS DEFAULT SAM SECURITY) do type nul > smoke\Windows\System32\config\%%H
           bin\nylon.exe scan smoke > smoke-output.txt 2>&1
-          if not errorlevel 1 exit /b 1
+          if errorlevel 1 (type smoke-output.txt & exit /b 1)
           findstr /C:"registry..." smoke-output.txt >nul
           if errorlevel 1 (type smoke-output.txt & exit /b 1)
           findstr /C:"NOT NULL constraint failed" smoke-output.txt >nul
           if not errorlevel 1 (type smoke-output.txt & exit /b 1)
           exit /b 0
+
+      - name: Verify invalid hives remain explicit partial evidence
+        shell: pwsh
+        run: |
+          @'
+          import sqlite3
+          with sqlite3.connect('output/image.db') as db:
+              assert db.execute("SELECT state FROM audit_identity").fetchone() == ('PARTIAL',)
+              assert db.execute("SELECT count(*) FROM registry_sources WHERE state='PARSE_FAILED'").fetchone()[0] == 4
+              assert db.execute("SELECT count(*) FROM registry_sources WHERE state='REDACTED_SENSITIVE'").fetchone()[0] == 2
+              assert db.execute("SELECT count(*) FROM registry_keys").fetchone()[0] == 0
+              assert db.execute("SELECT discovery_complete,representation_complete FROM collector_runs WHERE collector='filesystem'").fetchone() == (1,1)
+              assert db.execute("PRAGMA integrity_check").fetchall() == [('ok',)]
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Smoke-test optimized registry traversal
         shell: pwsh

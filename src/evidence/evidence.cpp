@@ -20,7 +20,7 @@ status_t initialize(database::database_t& database, const media::prepared_input_
 CREATE TABLE audit_identity (
  singleton INTEGER PRIMARY KEY CHECK(singleton=1),
  audit_id TEXT NOT NULL UNIQUE,
- schema_version INTEGER NOT NULL CHECK(schema_version=3),
+ schema_version INTEGER NOT NULL CHECK(schema_version=4),
  source_kind TEXT NOT NULL,
  source_sha256 TEXT,
  source_identity_state TEXT NOT NULL,
@@ -87,6 +87,22 @@ CREATE TABLE evidence_gaps (
  detail TEXT NOT NULL
 );
 CREATE INDEX gaps_source ON evidence_gaps(source_entry_id);
+CREATE TABLE registry_hives (
+ id INTEGER PRIMARY KEY,
+ name TEXT NOT NULL,
+ source_path TEXT NOT NULL,
+ required INTEGER NOT NULL
+);
+CREATE TABLE registry_sources (
+ id INTEGER PRIMARY KEY,
+ entry_id INTEGER UNIQUE REFERENCES fs_entries(id),
+ required_path TEXT,
+ required INTEGER NOT NULL,
+ state TEXT NOT NULL,
+ hive_id INTEGER UNIQUE REFERENCES registry_hives(id),
+ error_code INTEGER NOT NULL,
+ detail TEXT NOT NULL
+);
 CREATE TABLE source_metadata_availability (
  field TEXT PRIMARY KEY,
  state TEXT NOT NULL,
@@ -104,7 +120,7 @@ CREATE TABLE source_metadata_availability (
 			identity.push_back(hex[byte >> 4U]);
 			identity.push_back(hex[byte & 15U]);
 		}
-		query_t insert(handle, "INSERT INTO audit_identity(singleton,audit_id,schema_version,source_kind,source_sha256,source_identity_state,selected_index,selected_name,preparation_policy,collector_policy) VALUES(1,?1,3,?2,?3,?4,?5,?6,?7,'namespace-v1;registry-legacy');");
+		query_t insert(handle, "INSERT INTO audit_identity(singleton,audit_id,schema_version,source_kind,source_sha256,source_identity_state,selected_index,selected_name,preparation_policy,collector_policy) VALUES(1,?1,4,?2,?3,?4,?5,?6,?7,'namespace-v1;registry-inventory-v1;sensitive-omission-v1');");
 		insert.text(1, identity);
 		insert.text(2, input.source_kind);
 		if (!input.iso_sha256.empty()) insert.text(3, input.iso_sha256);
@@ -131,7 +147,7 @@ CREATE TABLE source_metadata_availability (
 		}
 		auto status = database.meta("audit_id", identity);
 		if (!status.ok()) return status;
-		return database.meta("schema_version", "3");
+		return database.meta("schema_version", "4");
 	}
 	catch (const std::exception& error) { return status_t::failure(error.what()); }
 }
@@ -143,7 +159,7 @@ status_t verify(database::database_t& database)
 		auto* handle = database.native_handle();
 		query_t check(handle, R"sql(
 SELECT
- (SELECT count(*) FROM audit_identity WHERE schema_version=3)=1
+ (SELECT count(*) FROM audit_identity WHERE schema_version=4)=1
  AND NOT EXISTS(SELECT 1 FROM collector_runs c,audit_identity a WHERE c.audit_id<>a.audit_id)
  AND NOT EXISTS(SELECT 1 FROM fs_entries f LEFT JOIN fs_entries p ON p.id=f.parent_id
                 WHERE f.parent_id IS NOT NULL AND (p.id IS NULL OR p.kind<>'DIRECTORY'))
@@ -159,6 +175,37 @@ SELECT
 		check_sql(handle, code);
 		if (code != SQLITE_ROW || sqlite3_column_int(check.get(), 0) != 1)
 			return status_t::failure("Raw namespace accounting invariant failed");
+		query_t migrated(handle, "SELECT state FROM collector_runs WHERE collector='registry';");
+		check_sql(handle, sqlite3_step(migrated.get()));
+		const auto* state = sqlite3_column_text(migrated.get(), 0);
+		if (state && std::string_view(reinterpret_cast<const char*>(state)) != "PENDING")
+		{
+			query_t registry(handle, R"sql(
+SELECT
+ NOT EXISTS(SELECT 1 FROM fs_entries f LEFT JOIN registry_sources s ON s.entry_id=f.id WHERE f.kind='FILE' AND s.id IS NULL)
+ AND (SELECT count(DISTINCT required_path) FROM registry_sources)=9
+ AND NOT EXISTS(SELECT 1 FROM registry_sources s LEFT JOIN registry_hives h ON h.id=s.hive_id
+   WHERE (s.state='PARSED' AND h.id IS NULL) OR (s.state<>'PARSED' AND s.hive_id IS NOT NULL))
+ AND NOT EXISTS(SELECT 1 FROM registry_hives h LEFT JOIN registry_sources s ON s.hive_id=h.id WHERE s.id IS NULL)
+ AND NOT EXISTS(SELECT 1 FROM registry_keys k LEFT JOIN registry_hives h ON h.id=k.hive_id WHERE h.id IS NULL)
+ AND NOT EXISTS(SELECT 1 FROM registry_keys k LEFT JOIN registry_keys p ON p.id=k.parent_id WHERE k.parent_id IS NOT NULL AND (p.id IS NULL OR p.hive_id<>k.hive_id))
+ AND NOT EXISTS(SELECT 1 FROM registry_values v LEFT JOIN registry_keys k ON k.id=v.key_id WHERE k.id IS NULL)
+ AND NOT EXISTS(SELECT 1 FROM registry_omissions o LEFT JOIN registry_keys k ON k.id=o.key_id WHERE k.id IS NULL)
+ AND NOT EXISTS(SELECT 1 FROM registry_hives WHERE name IN ('SAM','SECURITY'))
+ AND NOT EXISTS(SELECT 1 FROM collector_runs WHERE collector='registry' AND
+   (state NOT IN ('COMPLETE','COMPLETE_WITH_GAPS') OR representation_complete<>1
+    OR represented<>discovered OR represented<>(SELECT count(*) FROM registry_sources)
+    OR parsed<>(SELECT count(*) FROM registry_sources WHERE state='PARSED')));
+)sql");
+			const auto registry_code = sqlite3_step(registry.get());
+			check_sql(handle, registry_code);
+			if (registry_code != SQLITE_ROW || sqlite3_column_int(registry.get(), 0) != 1)
+				return status_t::failure("Inventory registry accounting/provenance invariant failed");
+		}
+		query_t foreign_keys(handle, "PRAGMA foreign_key_check;");
+		const auto foreign_key_code = sqlite3_step(foreign_keys.get());
+		check_sql(handle, foreign_key_code);
+		if (foreign_key_code != SQLITE_DONE) return status_t::failure("Evidence foreign-key invariant failed");
 		return status_t::success();
 	}
 	catch (const std::exception& error) { return status_t::failure(error.what()); }

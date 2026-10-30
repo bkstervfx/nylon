@@ -41,6 +41,55 @@ def hive_bytes():
     return hive
 
 
+def partial_failure_hive():
+    cells = bytearray(32)
+
+    def allocate(payload):
+        offset = len(cells)
+        size = (len(payload) + 11) // 8 * 8
+        cells.extend(struct.pack("<i", -size) + payload + bytes(size - 4 - len(payload)))
+        return offset
+
+    def key_payload(name, parent):
+        payload = bytearray(0x4C) + name.encode("ascii")
+        payload[:2] = b"nk"
+        struct.pack_into("<H", payload, 2, 0x20)
+        struct.pack_into("<I", payload, 0x10, parent)
+        struct.pack_into("<H", payload, 0x48, len(name))
+        return payload
+
+    root = allocate(key_payload("Root", 0xFFFFFFFF))
+    index = allocate(b"li" + struct.pack("<H", 300) + bytes(1200))
+    struct.pack_into("<I", cells, root + 4 + 0x14, 300)
+    struct.pack_into("<I", cells, root + 4 + 0x1C, index)
+    for number in range(300):
+        payload = key_payload(f"Child{number:03}", root)
+        struct.pack_into("<I", payload, 0x24, 1)
+        child = allocate(payload)
+        struct.pack_into("<I", cells, index + 8 + number * 4, child)
+        if number == 299:
+            struct.pack_into("<I", cells, child + 4 + 0x28, 0xFFFFFFF8)
+        else:
+            value_list = allocate(bytes(4))
+            value = bytearray(0x14) + b"Number"
+            struct.pack_into("<2sHIIIH", value, 0, b"vk", 6, 0x80000004, 42, 4, 1)
+            value_offset = allocate(value)
+            struct.pack_into("<I", cells, value_list + 4, value_offset)
+            struct.pack_into("<I", cells, child + 4 + 0x28, value_list)
+    bin_size = (len(cells) + 8 + 4095) // 4096 * 4096
+    free_size = bin_size - len(cells)
+    cells.extend(struct.pack("<i", free_size) + bytes(free_size - 4))
+    cells[:4] = b"hbin"
+    struct.pack_into("<I", cells, 8, bin_size)
+    header = hive_bytes()[:4096]
+    struct.pack_into("<I", header, 0x28, bin_size)
+    checksum = 0
+    for offset in range(0, 0x1FC, 4):
+        checksum ^= struct.unpack_from("<I", header, offset)[0]
+    struct.pack_into("<I", header, 0x1FC, checksum)
+    return header + cells
+
+
 def collect(root, destination):
     subprocess.run([str(EXE), str(root), str(destination)], check=True)
     connection = sqlite3.connect(destination)
@@ -160,12 +209,64 @@ def main():
         shutil.copy2(PROJECT / "bin" / "nylon.exe", scanner)
         subprocess.run([str(scanner), "scan", str(image)], check=True, capture_output=True)
         with sqlite3.connect(workspace / "output" / "image.db") as scanned:
-            assert scanned.execute("select count(*) from registry_keys").fetchone()[0] == 6
-            assert scanned.execute("select count(*) from registry_values where text_value='42'").fetchone()[0] == 6
-            assert scanned.execute("select schema_version,state from audit_identity").fetchone() == (3, "PARTIAL")
+            assert scanned.execute("select count(*) from registry_keys").fetchone()[0] == 4
+            assert scanned.execute("select count(*) from registry_values where text_value='42'").fetchone()[0] == 4
+            assert scanned.execute("select schema_version,state from audit_identity").fetchone() == (4, "PARTIAL")
+            assert scanned.execute("select count(*) from registry_sources where state='REDACTED_SENSITIVE'").fetchone()[0] == 2
+            assert scanned.execute("select count(*) from registry_hives h join registry_sources s on s.hive_id=h.id join fs_entries f on f.id=s.entry_id where h.source_path=f.path").fetchone()[0] == 4
             assert scanned.execute("pragma integrity_check").fetchall() == [("ok",)]
         scanned.close()
-    print("PASS: namespace accounting, identity, long/Unicode/invalid UTF-16 paths, hardlinks, reparse no-follow, unsafe-root/blocked-directory/depth gaps")
+        (image / "unusual.extension").write_bytes(hive_bytes())
+        (config / "SOFTWARE").unlink()
+        (config / "SYSTEM").write_bytes(partial_failure_hive())
+        dirty = hive_bytes()
+        struct.pack_into("<I", dirty, 8, 2)
+        checksum = 0
+        for offset in range(0, 0x1FC, 4):
+            checksum ^= struct.unpack_from("<I", dirty, offset)[0]
+        struct.pack_into("<I", dirty, 0x1FC, checksum)
+        (config / "COMPONENTS").write_bytes(dirty)
+        (config / "SAM").write_bytes(b"intentionally-invalid-sensitive-payload")
+        user_hive = image / "Users" / "Default" / "NTUSER.DAT"
+        user_hive.parent.mkdir(parents=True)
+        user_hive.write_bytes(b"unreviewed-user-data-not-opened")
+        subprocess.run([str(scanner), "scan", str(image)], check=True, capture_output=True)
+        failed_scan = sqlite3.connect(workspace / "output" / "image.db")
+        try:
+            assert failed_scan.execute("select count(*) from registry_keys").fetchone()[0] == 1
+            assert failed_scan.execute("select count(*) from registry_values").fetchone()[0] == 1
+            assert failed_scan.execute("select count(*) from registry_hives").fetchone()[0] == 1
+            assert failed_scan.execute("select state from registry_sources where required_path like '%SOFTWARE'").fetchone()[0] == "MISSING_REQUIRED"
+            assert failed_scan.execute("select state from registry_sources where required_path like '%SYSTEM'").fetchone()[0] == "PARSE_FAILED"
+            assert "transaction-log" in failed_scan.execute("select detail from registry_sources where required_path like '%COMPONENTS'").fetchone()[0]
+            assert failed_scan.execute("select state from registry_sources s join fs_entries f on f.id=s.entry_id where f.path='unusual.extension'").fetchone()[0] == "REDACTED_POLICY"
+            assert failed_scan.execute("select state from registry_sources where required_path like '%SAM'").fetchone()[0] == "REDACTED_SENSITIVE"
+            assert failed_scan.execute("select discovered=represented,representation_complete,parsed from collector_runs where collector='registry'").fetchone() == (1, 1, 1)
+            assert failed_scan.execute("select state from collector_status where collector='registry'").fetchone()[0] == "complete_with_gaps"
+            assert failed_scan.execute("pragma integrity_check").fetchall() == [("ok",)]
+            assert failed_scan.execute("pragma foreign_key_check").fetchall() == []
+        finally:
+            failed_scan.close()
+        named = hive_bytes()
+        named[4096 + 0x84 + 0x14:4096 + 0x84 + 0x1A] = b"TokenX"
+        (config / "DEFAULT").write_bytes(named)
+        denied_folder = image / "blocked"
+        denied_folder.mkdir()
+        (denied_folder / "unseen.hive").write_bytes(hive_bytes())
+        subprocess.run(["icacls.exe", str(denied_folder), "/deny", "*S-1-1-0:(RD)"], check=True, capture_output=True)
+        try:
+            subprocess.run([str(scanner), "scan", str(image)], check=True, capture_output=True)
+            with sqlite3.connect(workspace / "output" / "image.db") as partial:
+                assert partial.execute("select state from registry_sources where required_path like '%SOFTWARE'").fetchone()[0] == "UNRESOLVED"
+                assert partial.execute("select discovery_complete from collector_runs where collector='registry'").fetchone()[0] == 0
+                assert partial.execute("select count(*) from registry_values").fetchone()[0] == 0
+                assert partial.execute("select name,state from registry_omissions").fetchall() == [("TokenX", "REDACTED_POLICY")]
+                assert partial.execute("select count(*) from fs_entries").fetchone()[0] > 0
+                assert partial.execute("pragma foreign_key_check").fetchall() == []
+            partial.close()
+        finally:
+            subprocess.run(["icacls.exe", str(denied_folder), "/remove:d", "*S-1-1-0"], check=True, capture_output=True)
+    print("PASS: namespace identity/accounting/adversarial fixtures; inventory registry provenance, redaction, dirty/missing/partial-hive rollback and independent gaps")
 
 
 if __name__ == "__main__":

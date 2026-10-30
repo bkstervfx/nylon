@@ -204,6 +204,7 @@ nylon::status_t remove_database_artifacts(const std::filesystem::path& path)
 	for (const auto& candidate : {
 		path,
 		std::filesystem::path(path.native() + L"-wal"),
+		std::filesystem::path(path.native() + L"-journal"),
 		std::filesystem::path(path.native() + L"-shm") })
 	{
 		std::error_code error;
@@ -387,7 +388,7 @@ int wmain(int argc, wchar_t** argv)
 	}
 
 	for (const auto& [key, value] : {
-		std::pair<std::string_view, std::string_view>{ "schema_version", "2" },
+		std::pair<std::string_view, std::string_view>{ "schema_version", "4" },
 		{ "mode", "read_only_static_audit" } })
 	{
 		status = database.meta(key, value);
@@ -489,7 +490,16 @@ int wmain(int argc, wchar_t** argv)
 		return 1;
 	}
 
-	status = database.collector_status("registry", "complete");
+	sqlite3_stmt* registry_state = nullptr;
+	if (sqlite3_prepare_v2(database.native_handle(), "SELECT state FROM collector_runs WHERE collector='registry';", -1, &registry_state, nullptr) != SQLITE_OK)
+	{
+		std::cerr << "Unable to query registry accounting state\n";
+		return 1;
+	}
+	const bool registry_has_gaps = sqlite3_step(registry_state) != SQLITE_ROW ||
+		std::string_view(reinterpret_cast<const char*>(sqlite3_column_text(registry_state, 0))) != "COMPLETE";
+	sqlite3_finalize(registry_state);
+	status = database.collector_status("registry", registry_has_gaps ? "complete_with_gaps" : "complete");
 	if (!status.ok())
 	{
 		print_error(status.error());
