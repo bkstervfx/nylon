@@ -454,12 +454,23 @@ native-viewer validation remain outstanding.
 ## Context checkpoint / exact resume
 
 - M9 parent HEAD: 65c2131195f67a317eae4c8b5a7fde4193d73615. This ledger accompanies
-  the milestone commit titled `feat: inventory offline services and decode raw values`;
-  `git rev-parse HEAD` identifies that checkpoint after commit. M1-M8 remain completed
-  as recorded above; Phase A is not restarted. No unfinished M9 code change/blocker remains.
+  verified implementation commit ea63bfa0c012f62a6b45fcae3b5afc73f2cb5292,
+  `feat: inventory offline services and decode raw values`. A subsequent documentation-only
+  checkpoint records the publication blocker below; `git rev-parse HEAD` identifies it.
+  M1-M8 remain completed as recorded above; Phase A is not restarted. No unfinished M9
+  code change or known failing verification remains; remote publication is blocked.
 - User's session boundary: commit verified M9 on t3/nylon-vnext-migration, normal push
   only to that branch, confirm remote HEAD, then STOP. No M10 implementation in this run.
-  Push confirmation is an external observation made after this commit, not assumed here.
+  Publication attempt: `git push --set-upstream origin HEAD:refs/heads/t3/nylon-vnext-migration`
+  failed with HTTP 403: permission to bkstervfx/nylon.git denied to nonexistantstar.
+  A fresh ls-remote confirms no migration branch was created, and remote main remains
+  e5f99e66ed7c9c29c461578806f479bc73021825. No credential/account/remote switching or
+  speculative push retry was attempted. Stop here for the genuine external write-access
+  blocker. Required resource: a configured GitHub credential authorized to push this repo.
+- Exact resume after access is corrected: from this same clean worktree/branch, run
+  `git push --set-upstream origin HEAD:refs/heads/t3/nylon-vnext-migration`, then compare
+  `git rev-parse HEAD` with `git ls-remote --heads origin refs/heads/t3/nylon-vnext-migration`.
+  Confirm protected main unchanged and STOP. Do not start M10 as part of that retry.
 - Next milestone M10 (NOT started): define field-specific service configuration queries,
   duplicate/omission-aware interpretations, SOFTWARE svchost provenance and evidence-backed
   file/service/group reference outcomes across all discovered control sets. Define its
