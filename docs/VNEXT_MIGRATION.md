@@ -382,41 +382,107 @@ native-viewer validation remain outstanding.
   have ImagePath (629 REG_EXPAND_SZ, 2 REG_SZ). These are observed raw counts, not proof
   that all candidates are valid services or that their references resolve.
 
+## M9: service-definition raw inventory and typed values (verified checkpoint)
+
+- Purpose/prerequisite: inventory service evidence from M8's bound SYSTEM/control sets
+  before interpreting configuration or relationships. Catalog work M5/M6 is finished;
+  no completed audit/milestone is restarted.
+- Scope: every discovered ControlSet* candidate, exact direct Services roots, all direct
+  definition candidates (including missing Type/Start), every subtree key/value/omission
+  linked to raw IDs. Preserve duplicate roots/names and unsupported control-set forms.
+- Typed scope: independently account for every represented value with a versioned,
+  bounded REG_DWORD/REG_SZ/REG_EXPAND_SZ/REG_MULTI_SZ decoder. Preserve ordered strings
+  without host expansion. Wrong sizes, termination, encoding and unsupported types remain
+  explicit; binary structures are not interpreted merely because their bytes exist.
+- Non-scope: validity as a registered service, field-specific interpretation, svchost,
+  resolved dependency/file edges, runtime state, model/viewer work. Next milestone M10
+  must define these independently; this session stops after the M9 commit/push.
+- Invariant: one namespace decision per discovered set; every direct matching root and
+  candidate retained; each subtree key/value/omission linked exactly once; no unrelated
+  nested Services tree or CurrentControlSet alias included. Failed SYSTEM remains failed,
+  not absent. Publication independently recomputes and compares the full projection and
+  accounting, including every typed result/ordered string. Raw representation or generic
+  decoding does not mean field interpretation, service validity or dependency resolution.
+- Validation required: multiple/unsupported sets, duplicate roots/candidates, empty or
+  failed sources, malformed candidates, nested keys, omissions, unrelated decoys, mutation
+  rejection, decoder types/size/termination/Unicode/ordering/resource-limit cases,
+  read-only verifier hash, active scanner regressions and real-image counts.
+- Compatibility: fresh schema v7, unchanged registry tables; exact raw hash invalidates
+  derived artifacts. No in-place audit upgrade. Services remains PARTIAL with an explicit
+  field-interpretation/svchost/relationship gap; original metadata gaps remain unchanged.
+- Implemented: active scanner's existing post-registry service pass now discovers all
+  direct Services roots/candidates through indexed raw parent IDs. Compact domain tables
+  bind every subtree key/value/omission, and every value has a versioned typed outcome.
+  Ordered decoded strings preserve duplicates/spelling; no host expansion/search occurs.
+  No raw payload blobs are duplicated into service tables. Oversized values are accounted
+  without loading their payload into the decoder. Original raw bytes remain authoritative.
+- Publication independently recomputes all 15 service tables into connection-local TEMP
+  tables and compares exact projections, counters and remaining-scope gap. Accounting units
+  are control context/candidates/role queries, namespace decisions, definition candidates,
+  subtree keys, raw value links, omissions and typed outcomes. These are separate structural
+  units, not a count of valid services or fully interpreted configuration fields.
+- Verification (2026-10-31): fresh build.cmd/build-semantic.cmd; test-foundation.cmd,
+  test-catalog.cmd, test-references.cmd, test-controlsets.cmd and tests/source_binding.py
+  passed. Typed fixtures cover exact DWORD/unsigned range, UTF-16LE/Unicode/surrogates,
+  empty/ordered/repeated strings, no host expansion, termination/trailing-payload errors,
+  unsupported types, non-BLOB input and the exact/over-2-MiB limit. Mutation fixtures reject
+  altered provenance, missing candidates/keys/values/omissions, wrong decoding/strings,
+  parser version, scope/counters and hidden gaps. Failed SYSTEM has no fabricated namespaces.
+- Fresh real selected-image run: build/real-m9/output/image.db, schema 7, original ISO
+  SHA-256 4f59662a96fc1da48c1b415d6c369d08af55ddd64e8f1c84e0166d9e50405d7a,
+  selected index 2. One actual ControlSet001/Services root; 688 direct candidates,
+  2,792 subtree keys (including root), 11,657 linked raw values, 230 linked omissions.
+  All 11,657 typed outcomes represented: 10,832 PRESENT, 795 UNSUPPORTED_FORMAT,
+  30 PARSE_FAILED; 6,850 ordered decoded strings. Candidate count is not service validity.
+- Root-cause diagnosis of real parser gaps: 14 EXPAND_SZ values have no final NUL;
+  16 MULTI_SZ values use a single NUL rather than the strict double-NUL empty form.
+  Raw-byte-only diagnostics reproduced these termination-policy failures; synthetic
+  fixtures exercise both. No padding/repair/absence inference was introduced to hide them.
+  Unsupported binary configuration remains present raw evidence, not decoded semantics.
+- Real strict publication, foundation/reference/service verify-only gates, independent
+  raw subtree/definition/value/omission/typed correspondence queries, SQLite integrity/FKs
+  passed. Verify-only SHA-256 stayed
+  bc8679a7254c9746e2b9cffef3bacdd60adce710f37e23f9f24cca7fe7ccd9da.
+  Services remains PARTIAL: 27,030 discovered/represented units; 25,975 parsed structural
+  units, 795 unsupported, 30 failed, 230 redacted, one remaining-scope unresolved gap.
+  Registry COMPLETE_WITH_GAPS, source_media PARTIAL, 13 families PENDING; audit PARTIAL.
+- Scoped M9 inventory/typed-accounting invariant is satisfied by these observations.
+  Field-specific interpretation and evidence-backed service/svchost/file/dependency
+  relationships are NOT implemented. No whole-services/whole-image completion, remote CI,
+  real-model/GPU or native Atlas claim. Next is M10, not started in this session.
+
 ## Context checkpoint / exact resume
 
-- Current verified implementation HEAD: f7d6110eacdd18ef0cd0c903adc751757179e970.
-  This subsequent documentation-only context checkpoint records that implementation;
-  `git rev-parse HEAD` identifies the final continuity-note commit. No unfinished atomic
-  code change or known failing verification remains at this context boundary.
-- Completed local scoped milestones: M1 49b5f87, M2 3709c2d, M3 bf8b56a, M4 1096fe0,
-  M5 82ec18c, M6 586235b, M7 8f0a610, M8 f7d6110. Phase A is already complete;
-  do not restart it. Product migration is NOT complete; no architectural blocker known.
-- Next milestone M9 is NOT implemented or formally defined: service-definition inventory,
-  typed configuration and evidence-backed references using all discovered control sets,
-  not only the Current role. Define its scoped invariant/compatibility/tests before edits.
-- Exact next inspection: src/services/control_sets.cpp and its raw source links;
-  src/evidence/references.hpp/.cpp; src/registry/bulk_writer.cpp schemas/indexes;
-  src/main.cpp registry -> control-set -> publication sequence; tests/control_sets.py and
-  tests/foundation.py. Discovery should use indexed raw parent IDs, not directory rescans
-  or substring matching against nested DriverDatabase/other Services keys.
-- Preserve malformed/unknown service candidates and all raw key/value/omission links.
-  M7 intentionally leaves unquoted commands ambiguous, unknown bases/drives/variables and
-  parent traversal unresolved; do not turn these into guessed file/dependency edges.
-- Latest real audit: build/real-m8-iso/output/image.db (schema 6), scan.log alongside;
-  strict gate/integrity/FKs passed. Source ISO remains Downloads/windows.iso with hash
-  recorded above, selected index 2. Existing image payload cache was not upgraded/applied;
-  metadata-only sidecar is cache/catalogs-v1/<ISO-sha> under the persistent runtime root.
-- Commands: cmd /d /c .\build.cmd; cmd /d /c .\build-semantic.cmd;
+- M9 parent HEAD: 65c2131195f67a317eae4c8b5a7fde4193d73615. This ledger accompanies
+  the milestone commit titled `feat: inventory offline services and decode raw values`;
+  `git rev-parse HEAD` identifies that checkpoint after commit. M1-M8 remain completed
+  as recorded above; Phase A is not restarted. No unfinished M9 code change/blocker remains.
+- User's session boundary: commit verified M9 on t3/nylon-vnext-migration, normal push
+  only to that branch, confirm remote HEAD, then STOP. No M10 implementation in this run.
+  Push confirmation is an external observation made after this commit, not assumed here.
+- Next milestone M10 (NOT started): define field-specific service configuration queries,
+  duplicate/omission-aware interpretations, SOFTWARE svchost provenance and evidence-backed
+  file/service/group reference outcomes across all discovered control sets. Define its
+  invariant/tests/schema compatibility before editing; generic typed decoding is not that
+  interpretation. Reuse src/services/control_sets.cpp, value_decoder.hpp and M7's
+  src/evidence/references.hpp/.cpp; preserve malformed/unknown candidates and raw links.
+  Unquoted commands, unknown bases/drives/variables and parent traversal stay unresolved
+  unless new authoritative offline evidence justifies a narrower resolution.
+- Latest real audit: build/real-m9/output/image.db (schema 7), scan.log alongside.
+  Existing prepared image cache was reused without payload reapply/upgrade. Older maps
+  under build/real-m2 belong to that exact older audit; never attach them to this audit.
+- Reproduce verification: cmd /d /c .\build.cmd; cmd /d /c .\build-semantic.cmd;
   cmd /d /c .\test-foundation.cmd; cmd /d /c .\test-catalog.cmd;
   cmd /d /c .\test-references.cmd; cmd /d /c .\test-controlsets.cmd;
-  python tests/source_binding.py. Verify real audit with
-  .\bin\nylon-foundation-test.exe --verify .\build\real-m8-iso\output\image.db,
-  .\bin\nylon-references-test.exe --real <same-db>, and
-  .\bin\nylon-controlsets-test.exe --verify <same-db>.
-- Unfinished: service definitions/svchost/relationships, 13 PENDING families, source-media
-  remainder and original per-file metadata, direct WIM/ESD/SWM input, raw resume,
-  whole-evidence semantics, native Atlas, safe export, modification/re-scan/retained-
-  function verification. Registry-only planning/maps under build/real-m2 belong to that
-  older exact audit; never attach them to the schema-6 audit. Browser identity gating
-  remains an explicit gap. No remote CI or real-model/hardware claim.
-- Protected main remains clean at e5f99e6; no pushes, PRs, merges or source-image edits.
+  python tests/source_binding.py. Native real-audit gates:
+  .\bin\nylon-foundation-test.exe --verify .\build\real-m9\output\image.db;
+  .\bin\nylon-references-test.exe --real <same-db>;
+  .\bin\nylon-controlsets-test.exe --verify <same-db>. Verify-only must preserve raw hash.
+- Remaining product gaps: service field/svchost/dependency interpretation and unsupported
+  binary configuration, 13 PENDING families, source-media remainder/original metadata,
+  direct WIM/ESD/SWM input, raw resume, whole-evidence semantics, native Atlas, browser
+  identity gating, safe export and modification/re-scan/retained-function verification.
+  Product migration is NOT complete. No remote CI or real-model/hardware claim.
+- Protected local/remote main checked at e5f99e6; no main edits/merges, source-image writes,
+  cache deletion, force pushes or PRs authorized/performed. Only the M9 branch push is
+  now explicitly authorized; it must not alter main.

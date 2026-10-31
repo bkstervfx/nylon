@@ -158,7 +158,7 @@ def main():
         database.execute("INSERT INTO metadata VALUES('audit_id',?)", ("a" * 64,))
         database.commit()
         database.close()
-        for schema in ["4", "5", "6"]:
+        for schema in ["4", "5", "6", "7"]:
             with sqlite3.connect(source) as upgraded:
                 upgraded.execute("UPDATE metadata SET value=? WHERE meta_key='schema_version'", (schema,))
             upgraded.close()
@@ -175,7 +175,7 @@ def main():
             result = run(executable, *arguments, success=False)
             assert "Sensitive or unreviewed registry hive input" in result.stderr
             assert digest(mapped) == map_hash
-    print("PASS: synthetic semantic plan/preclassify/resume/fake-HTTP/hierarchy source accounting; content binding, relocation, same-size/time mutation, auxiliary refusal, WAL refusal and v4/v5/v6 metadata")
+    print("PASS: synthetic semantic plan/preclassify/resume/fake-HTTP/hierarchy source accounting; content binding, relocation, same-size/time mutation, auxiliary refusal, WAL refusal and v4/v5/v6/v7 metadata")
 
 
 if __name__ == "__main__":

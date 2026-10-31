@@ -380,8 +380,8 @@ int wmain(int argc, wchar_t** argv)
         nylon::semantic_binding::require_registry_policy(source.get());
         exec(source.get(), "PRAGMA query_only=ON; PRAGMA temp_store=MEMORY;");
         const auto schema = scalar_text(source.get(), "SELECT value FROM metadata WHERE meta_key='schema_version';");
-        if (!schema.has_value() || (*schema != "2" && *schema != "3" && *schema != "4" && *schema != "5" && *schema != "6"))
-            throw std::runtime_error("Semantic lifter requires compatible Nylon registry schema 2, 3, 4, 5 or 6");
+        if (!schema.has_value() || (*schema != "2" && *schema != "3" && *schema != "4" && *schema != "5" && *schema != "6" && *schema != "7"))
+            throw std::runtime_error("Semantic lifter requires compatible Nylon registry schema 2, 3, 4, 5, 6 or 7");
 
         const std::string fingerprint = source_fingerprint(source.get(), source_path);
         const std::filesystem::path map_path = map_path_for(source_path);

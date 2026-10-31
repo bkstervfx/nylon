@@ -8,7 +8,7 @@ Current implementation covers the project foundation, a selected-image working-n
 inventory, direct binary registry-hive auditing and portable Windows ISO preparation.
 This is not yet exhaustive whole-image domain collection.
 
-The raw schema v6 foundation records `audit_identity`, `collector_runs`, `fs_entries`,
+The raw schema v7 foundation records `audit_identity`, `collector_runs`, `fs_entries`,
 `evidence_gaps` and `source_metadata_availability`. Filesystem discovery/representation
 are separate from parsing and from other required collector families, which remain
 pending or explicitly partial until migrated. Paths preserve exact UTF-16 identity plus readable/comparison
@@ -61,8 +61,17 @@ tables. All raw matches stay linked; a missing/failed hive is not interpreted as
 service configuration, and `CurrentControlSet` is never assumed. Standard positive
 `ControlSetNNN`/DWORD selections are supported; other forms remain explicit unsupported
 or unresolved evidence. `test-controlsets.cmd` checks this boundary and its corruption
-gate. Services remains `PARTIAL`: service definitions, svchost and dependency collection
-are not yet implemented. Existing audits need a fresh scan for schema v6.
+gate. `service_namespaces`, `service_roots`, `service_definitions` and
+`service_inventory_*` now account for every direct service candidate and its complete
+raw subtree in all discovered control sets, including malformed candidates, duplicate
+names/roots and redacted omissions. `PRESENT` here means raw presence, not a valid
+service or interpreted configuration. `service_value_decodings` and ordered
+`service_value_strings` retain strict, bounded DWORD/string/multi-string decoding with
+raw value provenance. Unsupported types/binary structures, malformed termination and
+encoding, and values over the explicit 2 MiB parser limit remain accounted gaps; raw
+bytes stay available. Environment variables are not expanded against the host.
+Services remains `PARTIAL`: field-specific configuration, svchost and dependency
+interpretation are pending. Existing audits need a fresh scan for schema v7.
 
 ## Build
 

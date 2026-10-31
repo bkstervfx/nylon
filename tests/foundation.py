@@ -229,7 +229,7 @@ def main():
         with sqlite3.connect(workspace / "output" / "image.db") as scanned:
             assert scanned.execute("select count(*) from registry_keys").fetchone()[0] == 4
             assert scanned.execute("select count(*) from registry_values where text_value='42'").fetchone()[0] == 4
-            assert scanned.execute("select schema_version,state from audit_identity").fetchone() == (6, "PARTIAL")
+            assert scanned.execute("select schema_version,state from audit_identity").fetchone() == (7, "PARTIAL")
             assert scanned.execute("select state from collector_runs where collector='services'").fetchone() == ("PARTIAL",)
             assert scanned.execute("select count(*) from service_control_queries where state='NOT_PRESENT'").fetchone()[0] == 3
             assert scanned.execute("select count(*) from registry_sources where state='REDACTED_SENSITIVE'").fetchone()[0] == 2
