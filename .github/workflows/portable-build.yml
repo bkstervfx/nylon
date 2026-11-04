@@ -37,6 +37,10 @@ jobs:
         shell: cmd
         run: test-foundation.cmd
 
+      - name: Verify scan command and database publication
+        shell: cmd
+        run: test-scan.cmd
+
       - name: Verify retained source catalog
         shell: cmd
         run: test-catalog.cmd

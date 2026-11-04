@@ -11,6 +11,194 @@ Before making architectural changes, read completely:
 - `docs/VALIDATION_NOTES.md`
 - `README.md`
 
+## Mandatory source style and implementation approach
+
+The user approved the six-area organization and the actual Skeet coding conventions.
+These instructions apply to ALL Nylon-owned C++: scanner, mapping, Atlas, image
+operations, tests, utilities, and future code. Apply them to existing code as it is
+reorganized. Third-party source and generated payload bytes are not style templates.
+Do not rewrite unrelated code merely to make the entire tree uniform in one change.
+
+The reference is `C:/skeet-reference/psylo/src`, reviewed at Skeet commit
+`51e557a3b2fc9ec3c09db5722231ee1ec896becf`. Read its actual implementations when
+available, especially `main.cpp`, `cheat/routines/context/context.hpp`,
+`cheat/internal/instance/instance.hpp`, `core/threads/threads.cpp`,
+`core/win32/win32.hpp`, and `gui/config/config.cpp`.
+The concrete rules and examples below remain mandatory if that checkout is absent.
+Do not substitute a model's preferred style or a generic formatter preset.
+
+### Organization and implementation
+
+- The final source areas are `core`, `image`, `scan`, `map`, `strip`, and `atlas`.
+  This supersedes older target folder proposals, not their coverage/correctness rules.
+- Use purposeful subject subfolders such as `scan/registry` and `scan/services`.
+  Keep small features together; do not force a flat tree or create empty future files.
+- Use lowercase folder/file names and matching `.hpp`/`.cpp` stems. A subject folder
+  may have a main file of the same name, as in Skeet's `core/threads/threads.cpp`.
+- Keep related data, operations, SQL and checks together in their owning area.
+  Namespaces identify the area/subject (`nylon::scan::registry`), without reproducing
+  purely organizational labels or inventing a namespace for every file.
+- Prefer direct functions, plain records, explicit local state and visible execution
+  order. Use small named operations when they simplify the caller's actual logic.
+- Keep external API mechanics near their owner, like Skeet's `core::win32::read()`.
+  A high-level scan should call a useful database operation rather than prepare and
+  step SQLite statements itself. Do not wrap every external function mechanically.
+- Keep resource ownership explicit. Existing move-only handles, database ownership,
+  bounds checks, status/result errors and transaction guarantees must survive.
+  Do not copy mutable global image state, unsafe ownership, bugs or game behavior.
+- Use early error returns and readable loops. Preserve errors, provenance and explicit
+  gap states. Never simplify a failed query into absence or a successful empty result.
+- `namespace internal` is appropriate for implementation helpers, as in Skeet's
+  configuration and thread code. It is not permission to add another service layer.
+- A small shared `common.hpp` may hold common platform/standard declarations.
+  Keep domain state, schemas, model state and implementation ownership out of it.
+- Keep useful small/header-only functions inline and substantial implementations in
+  their owning source files. Do not impose a universal header-only or class pattern.
+
+### Names chosen in context
+
+- Functions, variables, members and namespaces use lowercase snake case. Choose
+  natural names within the function: `result`, `state`, `index`, `integrity_check`.
+  The user explicitly dislikes cryptic names such as `rc` and inflated replacements
+  such as `sqlite_result` or `integrity_passed`. Do not mechanically lengthen/shorten.
+- Use `_object` for principal domain objects, as in `context_object`/`thread_object`;
+  `_t` for supporting records such as `options_t`/`memory_t`; `_state` for state
+  records; and `_type` where it describes an enum. Existing clear nouns such as
+  `message` also occur. Do not append `_t` to every type or rename useful types blindly.
+- Use plain member names, without a blanket `m_` prefix or trailing underscore rule.
+  Necessary existing resource classes remain classes. Skeet has no class-definition
+  examples: their new declarations use the same expanded layout, access labels one
+  level inside the class and members one level below the labels.
+- Named limits and general fixed configuration constants use uppercase snake case,
+  as in `MAX_STRING_SIZE`/`DEFAULT_COLOR`. Field-like names in a dedicated format or
+  offset namespace may be lowercase, as in `sdk::offsets`.
+- New internal scoped enum members use the lowercase `recurring`/`continuous` pattern
+  in `core/threads` and `utils/logs`. Preserve external and persisted spellings.
+- Preserve external API names. Skeet's PascalCase `gui/custom` functions follow an
+  ImGui-facing pattern; do not spread that naming into Nylon's general functions.
+- Use clear explicit types for values and owned data. `auto` is appropriate for
+  iterators, structured bindings, factory results and other locally obvious types.
+  Keep necessary qualifiers, `[[nodiscard]]` and correct `noexcept` contracts.
+- Use Skeet's `uint32_t`, `uint64_t`, `int64_t`, `size_t` spellings where declared.
+  The pinned LLVM-MinGW compiler was tested with the project's warning flags and
+  rejects `ui32`, `ui64`, `i64` suffixes. Use standard literals/suffixes or explicit
+  conversions preserving width/sign; do not change toolchain flags to mimic MSVC.
+- Use `nullptr`, named C++ casts, and fully written uppercase float suffixes such as
+  `100.0F`. Preserve the types and values required by parsers and external formats.
+
+### Exact presentation
+
+- Hard tabs, displayed at four columns; indent namespace contents as well as bodies.
+- Allman braces for namespaces, types, functions, conditionals, loops and scopes.
+  Even single-return functions have a separate body and closing brace.
+- No compact condition/body lines, unbraced branches, multiple executable statements
+  per line, nested ternaries, or compressed loops/functions. Expand dense conditions
+  into named intermediate values or readable multiline expressions when helpful.
+- Use standalone indented `//` separators between logical steps, guard clauses,
+  function definitions and declaration groups. They are intentional visual structure:
+  NEVER delete them as cleanup or substitute blank lines/banners for them.
+  Closely related declarations/assignments can remain consecutive, as in Skeet.
+- Headers use path-derived uppercase include guards and `#endif // GUARD_NAME`.
+  Use three standalone `//` lines after the guard, two before the main namespace,
+  a separator inside the namespace at its beginning/end, and three before `#endif`.
+- Source files normally include their matching header first, then two separators.
+  Group additional includes by purpose with separators; retain two before the main
+  namespace. Required preprocessor definitions may precede affected includes.
+- Use quoted project includes, forward slashes, matching-header basenames and
+  source-root paths for other project includes. No automatic alphabetic sorting.
+- Empty parentheses stay empty: `initialize()`. Space inside nonempty parentheses:
+  `read( address )`, `if ( !valid )`, `sizeof( value )`, including nested expressions.
+- Space inside nonempty array brackets: `data[ index ]`, `char data[ 64 ]`.
+  Empty brackets remain `[]`. Attach pointers/references to types: `const char* name`.
+- Space around binary/assignment/conditional operators; attach unary operators to
+  operands. Preserve `++index`, `!valid`, `&value`, and `*pointer` forms.
+- Ordinary templates use `std::vector<entry_t>`; declarations use
+  `template<typename type>` or the observed `template<typename... Args>` pack form.
+  Named casts use `static_cast< uint32_t >( value )`, including interior angle spaces.
+- Preserve the appropriate initialization forms: `= false`, `= nullptr`, `= {}`,
+  `type{}`, `{ 0 }`, `{ first, second }` and `buffer( size )` all occur in Skeet.
+- Expand long calls with the opening parenthesis on its own line, one argument per
+  indented line and a closing `);`, as in `gui/overlay/overlay.cpp`.
+  Expanded declarations can use the same arrangement. There is no arbitrary 80-column
+  limit; never use that as an excuse to compress logic or obscure a simple expression.
+- Lambda bodies are expanded; a callback invocation closes with `} );`.
+  Switch cases are indented inside the switch and use expanded braced bodies, as in
+  `gui/config/config.cpp`. `else`, `catch` and `default` start their own lines.
+- Use short useful explanatory comments, field annotations and labeled local sections.
+  Do not generate doc blocks, decorative banners or comments narrating every statement.
+- Preserve CRLF in owned C++/batch files. Do not restyle SQL contents, persisted names,
+  protocol values or diagnostic text merely because C++ identifiers are being improved.
+
+### Actual reference examples
+
+From Skeet `cheat/data/vector/vector.hpp` (unchanged):
+
+```cpp
+#ifndef CHEAT_DATA_VECTOR_HPP
+#define CHEAT_DATA_VECTOR_HPP
+//
+//
+//
+#include "common.hpp"
+//
+//
+namespace cheat::vector
+{
+	//
+	struct memory_t
+	{
+		uint64_t start = 0ui64;
+		uint64_t end = 0ui64;
+		uint64_t capacity = 0ui64;
+	};
+	//
+}
+//
+//
+//
+#endif // CHEAT_DATA_VECTOR_HPP
+```
+
+From Skeet `core/threads/threads.cpp` (unchanged):
+
+```cpp
+	bool is_running()
+	{
+		std::lock_guard<std::mutex> guard( threads_mutex );
+		//
+		if ( threads.empty() )
+		{
+			return false;
+		}
+		//
+		for ( const auto& thread : threads )
+		{
+			if ( !thread->running.load() || !thread->handle.joinable() )
+			{
+				return false;
+			}
+		}
+		//
+		return true;
+	}
+```
+
+### Resolving differences and reviewing changes
+
+The dominant hand-written core/domain layout and the user's explicit instructions
+resolve conflicting examples: use tabs despite the space-indented internal string
+file; expand the compact lines in custom GUI/math code; use named casts and nullptr
+rather than their GUI alternatives; retain semantic type-name distinctions.
+Do not infer a style rule from misspellings, incidental mistakes or embedded bytes.
+
+Before calling a change complete, inspect all changed C++ and compare it against the
+examples and reference implementations. Check naming, logic, local state, ownership,
+call flow, headers, separators and file placement, not only compilation.
+Do not run a generic formatter until its exact output is verified on headers,
+separators, namespaces, casts, lambdas, switches and long calls. Manual formatting is
+required until that is demonstrated. Future sessions must follow this section even
+when another model or formatter prefers a different convention.
+
 ## Authority and evidence
 
 Use this hierarchy:

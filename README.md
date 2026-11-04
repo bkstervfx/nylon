@@ -44,6 +44,12 @@ publication can therefore be a `PARTIAL` audit with explicit collector gaps; it 
 whole-image completion. Raw staging uses rollback journaling to isolate failed hives.
 
 After `build.cmd`, `test-foundation.cmd` runs deterministic namespace and registry fixtures.
+`test-scan.cmd` checks command-line errors, registry-accounting query failures, staging
+publication failure/retry, schema v7 integrity and unchanged synthetic source payloads.
+The Python fixture scripts require Python 3. An optional comparison against a saved
+pre-refactor executable is available with `python tests/scan.py --baseline <nylon.exe>`.
+It compares console output, schema and every table, normalizing audit IDs, run timestamps
+and filesystem access times that can change between reads.
 `test-catalog.cmd` exercises catalog retention/accounting, parser limits and synthetic
 cold/warm/recovery/concurrent cache paths; synthetic tool fixtures are not real ISO/WIM validation.
 
@@ -72,6 +78,15 @@ encoding, and values over the explicit 2 MiB parser limit remain accounted gaps;
 bytes stay available. Environment variables are not expanded against the host.
 Services remains `PARTIAL`: field-specific configuration, svchost and dependency
 interpretation are pending. Existing audits need a fresh scan for schema v7.
+
+## Source organization
+
+The first scanner reorganization keeps command-line parsing and process exit handling
+in `src/main.cpp`. `src/scan/scan.cpp` owns the visible scan sequence;
+`src/scan/database.cpp` owns its database preparation, registry completion check and
+verified publication. Existing collectors and media/platform code keep their current
+paths until a focused follow-up moves them. This is structural work after M9, not M10.
+The approved source areas and mandatory Skeet coding rules are recorded in `AGENTS.md`.
 
 ## Build
 
