@@ -1,6 +1,7 @@
-#include "registry.hpp"
+#include "collector.hpp"
 #include "bulk_writer.hpp"
 #include "detail.hpp"
+#include "../evidence/sql.hpp"
 
 #include <Windows.h>
 
@@ -42,6 +43,15 @@ using detail::decode_utf16;
 using detail::equal_ordinal_ignore_case;
 using detail::ordinal_less_t;
 using detail::read_number;
+
+bool sensitive_label(std::string label)
+{
+	for (auto& character : label)
+		if (character >= 'a' && character <= 'z') character = static_cast<char>(character - 'a' + 'A');
+	for (const auto* pattern : { "PASSWORD", "SECRET", "CREDENTIAL", "PRIVATEKEY", "TOKEN", "\\SAM\\", "\\SECURITY\\", "\\POLICY\\" })
+		if (label.find(pattern) != std::string::npos) return true;
+	return false;
+}
 
 result_t<std::optional<std::string>> value_text(const value_t& value)
 {
@@ -101,49 +111,11 @@ result_t<std::optional<std::string>> value_text(const value_t& value)
 		std::optional<std::string>(std::move(converted).value()));
 }
 
-bool is_user_hive_candidate(const std::filesystem::path& path)
-{
-	const auto filename = path.filename().native();
-	return equal_ordinal_ignore_case(filename, L"NTUSER.DAT") ||
-		equal_ordinal_ignore_case(filename, L"UsrClass.dat");
-}
-
-bool path_not_found(const std::error_code& error) noexcept
-{
-	return error == std::errc::no_such_file_or_directory ||
-		error.value() == ERROR_FILE_NOT_FOUND ||
-		error.value() == ERROR_PATH_NOT_FOUND;
-}
-
-status_t record_hive_error(
-	database::database_t& database,
-	std::string_view hive_name,
-	bool required,
-	const error_t& error)
-{
-	auto error_object = database.insert_object(
-		"audit_error",
-		std::string("registry:") + std::string(hive_name),
-		std::string(hive_name));
-	if (!error_object.ok())
-	{
-		return status_t::failure(error_object.error().message, error_object.error().code);
-	}
-
-	for (const auto& [key, value] : {
-		std::pair<std::string_view, std::string>{ "collector", "registry" },
-		{ "message", error.message },
-		{ "code", std::to_string(error.code) },
-		{ "required", required ? "true" : "false" } })
-	{
-		auto status = database.property(error_object.value(), key, value);
-		if (!status.ok()) return status;
-	}
-	return status_t::success();
 }
 
 status_t scan_hive(
 	const std::filesystem::path& path,
+	std::string_view source_relative,
 	std::string_view hive_name,
 	bool required,
 	database::database_t& database,
@@ -153,20 +125,12 @@ status_t scan_hive(
 	auto hive_result = hive_t::open(path);
 	if (!hive_result.ok())
 	{
-		auto record_status = record_hive_error(database, hive_name, required, hive_result.error());
-		if (!record_status.ok()) return record_status;
-		if (required) return status_t::failure(hive_result.error().message, hive_result.error().code);
-		return status_t::success();
+		return status_t::failure(hive_result.error().message, hive_result.error().code);
 	}
 
 	if (progress_state != nullptr) progress_state->hive(hive_name);
 
-	auto source_path_result = platform::utf8(path.generic_wstring());
-	if (!source_path_result.ok())
-	{
-		return status_t::failure(source_path_result.error().message, source_path_result.error().code);
-	}
-	auto hive_id_result = writer.add_hive(hive_name, source_path_result.value(), required);
+	auto hive_id_result = writer.add_hive(hive_name, source_relative, required);
 	if (!hive_id_result.ok())
 	{
 		return status_t::failure(hive_id_result.error().message, hive_id_result.error().code);
@@ -174,6 +138,7 @@ status_t scan_hive(
 	const database::object_id_t hive_id = hive_id_result.value();
 
 	auto hive = std::move(hive_result).value();
+	evidence::query_t omission(database.native_handle(), "INSERT INTO registry_omissions(key_id,name,value_type,state,reason) VALUES(?1,?2,?3,'REDACTED_POLICY','Sensitive-name policy; no raw value bytes retained or sent to semantic input');");
 	auto root_offset = hive.root_key_offset();
 	if (!root_offset.ok()) return status_t::failure(root_offset.error().message, root_offset.error().code);
 
@@ -199,7 +164,13 @@ status_t scan_hive(
 			return status_t::failure("Registry key hierarchy exceeds the supported depth", ERROR_BADDB);
 		}
 
-		auto values_result = hive.values(current.offset);
+		const bool omitted_key = sensitive_label(current.path + "\\");
+		auto values_result = omitted_key ? result_t<std::vector<value_t>>::success({}) : hive.values(current.offset);
+		if (omitted_key)
+		{
+			omission.number(1, current.id);
+			omission.done();
+		}
 		if (!values_result.ok())
 		{
 			return status_t::failure(values_result.error().message, values_result.error().code);
@@ -230,6 +201,14 @@ status_t scan_hive(
 			if (!value_name_result.ok())
 			{
 				return status_t::failure(value_name_result.error().message, value_name_result.error().code);
+			}
+			if (sensitive_label(value_name_result.value()))
+			{
+				omission.number(1, current.id);
+				omission.text(2, value_name_result.value());
+				omission.number(3, value.type);
+				omission.done();
+				continue;
 			}
 			auto text_result = value_text(value);
 			if (!text_result.ok())
@@ -285,198 +264,6 @@ status_t scan_hive(
 		progress_state->batch(unpublished_keys, unpublished_values);
 	}
 	return status_t::success();
-}
-
-bool has_primary_hive_header(const std::filesystem::path& path)
-{
-	auto mapped = platform::mapped_file_t::open_readonly(path);
-	if (!mapped.ok()) return false;
-	const auto bytes = mapped.value().bytes();
-	if (bytes.size() < 0x24U ||
-		std::to_integer<unsigned char>(bytes[0]) != 'r' ||
-		std::to_integer<unsigned char>(bytes[1]) != 'e' ||
-		std::to_integer<unsigned char>(bytes[2]) != 'g' ||
-		std::to_integer<unsigned char>(bytes[3]) != 'f')
-	{
-		return false;
-	}
-
-	auto major = read_number<std::uint32_t>(bytes, 0x14U, "Registry major version");
-	auto minor = read_number<std::uint32_t>(bytes, 0x18U, "Registry minor version");
-	auto type = read_number<std::uint32_t>(bytes, 0x1CU, "Registry file type");
-	auto format = read_number<std::uint32_t>(bytes, 0x20U, "Registry file format");
-	return major.ok() && minor.ok() && type.ok() && format.ok() &&
-		major.value() == 1U && minor.value() >= 3U && minor.value() <= 6U &&
-		type.value() == 0U && format.value() == 1U;
-}
-
-status_t scan_optional_hive_path(
-	const image::image_t& image,
-	database::database_t& database,
-	bulk_writer_t& writer,
-	const std::filesystem::path& path,
-	std::set<std::wstring, ordinal_less_t>& scanned,
-	progress::registry_state_t* progress_state)
-{
-	const std::wstring normalized = path.lexically_normal().native();
-	if (!scanned.insert(normalized).second) return status_t::success();
-	auto relative = image.relative_utf8(path);
-	if (!relative.ok()) return status_t::failure(relative.error().message, relative.error().code);
-	std::string label = "HIVE:";
-	label.append(relative.value());
-	return scan_hive(path, label, false, database, writer, progress_state);
-}
-
-}
-
-status_t scan_all(
-	const image::image_t& image,
-	database::database_t& database,
-	progress::registry_state_t* progress_state)
-{
-	auto writer_result = bulk_writer_t::create(database);
-	if (!writer_result.ok())
-	{
-		return status_t::failure(writer_result.error().message, writer_result.error().code);
-	}
-	auto writer = std::move(writer_result).value();
-
-	struct hive_spec_t { const wchar_t* relative_path; const char* name; bool required; };
-	const hive_spec_t known_hives[] = {
-		{ L"Windows\\System32\\config\\SOFTWARE", "SOFTWARE", true },
-		{ L"Windows\\System32\\config\\SYSTEM", "SYSTEM", true },
-		{ L"Windows\\System32\\config\\COMPONENTS", "COMPONENTS", true },
-		{ L"Windows\\System32\\config\\DEFAULT", "DEFAULT", true },
-		{ L"Windows\\System32\\config\\SAM", "SAM", true },
-		{ L"Windows\\System32\\config\\SECURITY", "SECURITY", true },
-		{ L"Boot\\BCD", "BCD", false },
-		{ L"EFI\\Microsoft\\Boot\\BCD", "BCD_EFI", false },
-		{ L"Windows\\AppCompat\\Programs\\Amcache.hve", "AMCACHE", false }
-	};
-
-	std::set<std::wstring, ordinal_less_t> scanned;
-	for (const auto& specification : known_hives)
-	{
-		auto path_result = image.resolve(specification.relative_path);
-		if (!path_result.ok()) return status_t::failure(path_result.error().message, path_result.error().code);
-		const auto& path = path_result.value();
-		std::error_code error;
-		const bool exists = std::filesystem::is_regular_file(path, error);
-		if (error)
-		{
-			if (path_not_found(error))
-			{
-				if (specification.required)
-				{
-					return status_t::failure(
-						std::string("Required offline registry hive is missing: ") + specification.name,
-						ERROR_FILE_NOT_FOUND);
-				}
-				continue;
-			}
-			return status_t::failure("Unable to inspect registry hive path", error.value());
-		}
-		if (!exists)
-		{
-			if (specification.required)
-			{
-				return status_t::failure(
-					std::string("Required offline registry hive is missing: ") + specification.name,
-					ERROR_FILE_NOT_FOUND);
-			}
-			continue;
-		}
-		scanned.insert(path.lexically_normal().native());
-		auto result = scan_hive(
-			path,
-			specification.name,
-			specification.required,
-			database,
-			writer,
-			progress_state);
-		if (!result.ok()) return result;
-	}
-
-	auto config_result = image.resolve(L"Windows\\System32\\config");
-	if (!config_result.ok()) return status_t::failure(config_result.error().message, config_result.error().code);
-	const auto& config_root = config_result.value();
-	std::error_code error;
-	std::vector<std::filesystem::path> candidates;
-	for (std::filesystem::directory_iterator iterator(
-		config_root,
-		std::filesystem::directory_options::skip_permission_denied,
-		error);
-		!error && iterator != std::filesystem::directory_iterator();
-		iterator.increment(error))
-	{
-		std::error_code entry_error;
-		if (iterator->is_regular_file(entry_error) && !entry_error && has_primary_hive_header(iterator->path()))
-		{
-			candidates.push_back(iterator->path());
-		}
-	}
-	if (error) return status_t::failure("Unable to enumerate offline registry config directory", error.value());
-	std::sort(candidates.begin(), candidates.end());
-	for (const auto& candidate : candidates)
-	{
-		auto result = scan_optional_hive_path(image, database, writer, candidate, scanned, progress_state);
-		if (!result.ok()) return result;
-	}
-
-	for (const auto* relative_root : { L"Users", L"Windows\\ServiceProfiles" })
-	{
-		auto root_result = image.resolve(relative_root);
-		if (!root_result.ok()) return status_t::failure(root_result.error().message, root_result.error().code);
-		const auto& root = root_result.value();
-		error.clear();
-		const bool is_directory = std::filesystem::is_directory(root, error);
-		if (error)
-		{
-			if (path_not_found(error))
-			{
-				error.clear();
-				continue;
-			}
-			return status_t::failure("Unable to inspect registry hive search root", error.value());
-		}
-		if (!is_directory) continue;
-
-		candidates.clear();
-		for (std::filesystem::recursive_directory_iterator iterator(
-			root,
-			std::filesystem::directory_options::skip_permission_denied,
-			error);
-			!error && iterator != std::filesystem::recursive_directory_iterator();
-			iterator.increment(error))
-		{
-			auto attributes = platform::file_attributes(iterator->path());
-			if (!attributes.ok()) return status_t::failure(attributes.error().message, attributes.error().code);
-			if ((attributes.value() & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
-			{
-				std::error_code type_error;
-				if (iterator->is_directory(type_error) && !type_error) iterator.disable_recursion_pending();
-				continue;
-			}
-			std::error_code entry_error;
-			if (iterator->is_regular_file(entry_error) && !entry_error && is_user_hive_candidate(iterator->path()))
-			{
-				candidates.push_back(iterator->path());
-			}
-		}
-		if (error) return status_t::failure("Unable to enumerate offline user registry hives", error.value());
-		std::sort(candidates.begin(), candidates.end());
-		for (const auto& candidate : candidates)
-		{
-			auto result = scan_optional_hive_path(image, database, writer, candidate, scanned, progress_state);
-			if (!result.ok()) return result;
-		}
-	}
-
-	if (progress_state != nullptr)
-	{
-		progress_state->batch(0U, 0U, "building registry indexes");
-	}
-	return writer.finalize();
 }
 
 }

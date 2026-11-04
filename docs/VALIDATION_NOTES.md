@@ -126,3 +126,53 @@ FULL_TARGET_COVERAGE_INVARIANTS_PASS
 ```
 
 Do not promote a result to a stronger level than was actually observed.
+
+
+## 9. Local scanner-flow refactor validation - November 4, 2026
+
+Starting revision: `86f70cb46de06827ff7ca818b40b5f1cfe3bcf15` (M9, raw schema v7).
+The first structural change extracts command orchestration and audit lifecycle from
+`main.cpp` into `src/scan`, without moving or rewriting the collectors. One related
+error-handling correction rejects missing/null/duplicate registry-accounting rows and
+query failures rather than reporting them as successful collection with gaps.
+
+After the factory reset, the existing portable bootstrap restored its unchanged pins:
+LLVM-MinGW `20261020`, SQLite `3.54.1`, 7-Zip `26.05`, wimlib `1.14.5`.
+LF-only batch files initially failed with a missing `download_verified` label;
+`.gitattributes` now requires CRLF for batch files and owned C++ source/headers.
+An isolated CPython `3.13.9` embeddable runtime was restored under the local Nylon tools
+directory for tests. Its archive SHA-256 matched the official download metadata:
+`91d828c2da3a029b41699e918674a0cb379c02cf20dab9c501306885f837402a`.
+This was a digest comparison, not independent verification of a Sigstore signature.
+No dependency pins were upgraded and no global Python installation was changed.
+
+Observed locally before changing M9 C++:
+
+- `build.cmd`, `build-semantic.cmd`, `build-viewer.cmd`: passed compilation.
+- `test-foundation.cmd`, `test-catalog.cmd`, `test-references.cmd`,
+  `test-controlsets.cmd`, `python tests/source_binding.py`: passed their synthetic checks.
+
+Observed locally after the scanner-flow change:
+
+- `build.cmd`: passed compilation with the existing warning/error flags.
+- All five existing regression commands above: passed again.
+- `test-scan.cmd`: passed the native accounting-error checks and synthetic scan tests.
+  These cover invalid arguments, fresh v7 output, integrity/foreign-key checks,
+  unchanged source payloads, preservation of published evidence when input/runtime
+  preparation or final replacement fails, and successful publication on retry.
+- `python tests/scan.py --baseline build/baseline-nylon.exe`: the saved unchanged M9
+  executable and the rebuilt scanner produced matching console output, schema and
+  contents of all 36 tables on the same synthetic expanded image. Only per-run audit
+  IDs, run timestamps and filesystem access times were normalized. A separate repeat
+  using the unchanged executable twice also changed the root directory access time;
+  other filesystem fields matched in that control.
+- Changed C++ was reviewed against Skeet's entry point, context routines, Win32
+  helpers, thread implementation and header layout. The existing compiler rejects
+  Skeet's MSVC integer suffixes under the project's flags; standard literals preserve
+  that compatibility without changing compiler flags.
+
+These are local compilation/synthetic observations. No remote CI run was performed.
+The previously recorded Windows ISO, audit database and prepared image cache were
+unavailable after recovery. No real-image scan, real-model/GPU run, stripping,
+reconstruction, installation, VM boot or retained-feature validation was performed.
+Historical observations above remain historical; M10 has not started.

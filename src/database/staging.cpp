@@ -62,7 +62,7 @@ status_t activate_staging_database(database_t& database)
 	if (handle == nullptr) return status_t::failure("SQLite database is not open");
 
 	return execute(handle, R"sql(
-PRAGMA journal_mode=OFF;
+PRAGMA journal_mode=DELETE;
 PRAGMA synchronous=OFF;
 PRAGMA locking_mode=EXCLUSIVE;
 PRAGMA temp_store=MEMORY;

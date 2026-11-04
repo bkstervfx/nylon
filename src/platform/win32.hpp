@@ -73,11 +73,13 @@ private:
 
 [[nodiscard]] error_t win32_error(std::string context, std::uint32_t code = GetLastError());
 [[nodiscard]] result_t<std::string> utf8(std::wstring_view value);
+[[nodiscard]] result_t<std::string> path_comparison_key(std::wstring_view value);
 [[nodiscard]] result_t<std::wstring> wide(std::string_view value);
 [[nodiscard]] result_t<std::filesystem::path> executable_path();
 [[nodiscard]] result_t<std::wstring> native_path(const std::filesystem::path& path);
 [[nodiscard]] result_t<DWORD> file_attributes(const std::filesystem::path& path);
 [[nodiscard]] result_t<unique_handle_t> open_read_lock(const std::filesystem::path& path);
+[[nodiscard]] result_t<unique_handle_t> open_directory_read_lock(const std::filesystem::path& path, bool allow_child_writes = false);
 
 }
 

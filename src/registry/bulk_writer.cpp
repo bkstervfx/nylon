@@ -354,6 +354,15 @@ CREATE TABLE IF NOT EXISTS registry_values (
 	data BLOB NOT NULL,
 	text_value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS registry_omissions (
+	id INTEGER PRIMARY KEY,
+	key_id INTEGER NOT NULL REFERENCES registry_keys(id),
+	name TEXT,
+	value_type INTEGER,
+	state TEXT NOT NULL,
+	reason TEXT NOT NULL
+);
 )sql";
 
 	auto status = execute(handle, schema);
@@ -502,6 +511,14 @@ status_t bulk_writer_t::add_value(
 		return impl_->flush_values();
 	}
 	return status_t::success();
+}
+
+void bulk_writer_t::discard_pending() noexcept
+{
+	if (!impl_) return;
+	impl_->keys.clear();
+	impl_->values.clear();
+	impl_->pending_blob_bytes = 0;
 }
 
 status_t bulk_writer_t::flush()

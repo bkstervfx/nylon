@@ -233,6 +233,20 @@ result_t<std::string> utf8(std::wstring_view value)
 	return result_t<std::string>::success(std::move(output));
 }
 
+result_t<std::string> path_comparison_key(std::wstring_view value)
+{
+	if (value.empty()) return result_t<std::string>::success({});
+	if (value.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+		return result_t<std::string>::failure("Path comparison input is too large");
+	const auto length = static_cast<int>(value.size());
+	const int size = LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_UPPERCASE, value.data(), length, nullptr, 0, nullptr, nullptr, 0);
+	if (size <= 0) return result_t<std::string>::failure("Unable to size invariant path key", GetLastError());
+	std::wstring key(static_cast<std::size_t>(size), L'\0');
+	if (LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_UPPERCASE, value.data(), length, key.data(), size, nullptr, nullptr, 0) <= 0)
+		return result_t<std::string>::failure("Unable to create invariant path key", GetLastError());
+	return utf8(key);
+}
+
 result_t<std::wstring> wide(std::string_view value)
 {
 	if (value.empty())

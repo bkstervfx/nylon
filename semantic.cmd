@@ -8,7 +8,7 @@ if "%DB%"=="" set "DB=%ROOT%\output\image.db"
 set "SEMANTIC=%ROOT%\bin\nylon-semantic.exe"
 set "CLASSIFIER=%ROOT%\bin\nylon-semantic-classify.exe"
 set "LINKER=%ROOT%\bin\nylon-semantic-link.exe"
-set "SEMANTIC_MARKER=%ROOT%\bin\nylon-semantic.performance-v1"
+set "SEMANTIC_MARKER=%ROOT%\bin\nylon-semantic.identity-v1"
 set "VIEWER=%ROOT%\bin\nylon-viewer.exe"
 set "VIEWER_MARKER=%ROOT%\bin\nylon-viewer.atlas-v2"
 

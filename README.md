@@ -4,7 +4,89 @@ Nylon is a read-only C++20 auditor for offline Windows images.
 
 > **Current behavior vs product target:** this README primarily documents commands and behavior that exist today. The canonical long-term product goal and architecture are defined in `docs/PRODUCT_GOAL.md` and `docs/ARCHITECTURE.md`; agent guardrails are in `AGENTS.md`. Do not infer that target collectors/native Atlas are already implemented from those documents, and do not infer that the current registry/browser vertical slice is the final product architecture.
 
-Current implementation covers the project foundation, direct binary registry-hive auditing and portable Windows ISO preparation.
+Current implementation covers the project foundation, a selected-image working-namespace
+inventory, direct binary registry-hive auditing and portable Windows ISO preparation.
+This is not yet exhaustive whole-image domain collection.
+
+The raw schema v7 foundation records `audit_identity`, `collector_runs`, `fs_entries`,
+`evidence_gaps` and `source_metadata_availability`. Filesystem discovery/representation
+are separate from parsing and from other required collector families, which remain
+pending or explicitly partial until migrated. Paths preserve exact UTF-16 identity plus readable/comparison
+forms where conversion succeeds. Reparse entries are recorded without following targets.
+Working-view metadata is not original source metadata; uncollected original fields are
+explicitly `NOT_EXPOSED`. Expanded-tree source identity is explicitly weaker/run-scoped,
+not a content hash. Existing audits require a fresh staged scan, not an in-place upgrade.
+
+Newly prepared ISO caches retain the original install-container XML catalog and its
+SHA-256. `source_catalog`, `source_images` and `source_image_fields` preserve exact XML,
+all exposed indexes and ordered/repeated image metadata fields (including unknown fields).
+The bounded XML projection prohibits DTDs/external resolution; unsupported/malformed
+retained catalogs have explicit failure states, not false absence. Legacy warm image
+caches are reused unchanged. When pinned media tools are available, Nylon queries only
+install-container metadata and retains a separate immutable catalog under
+`%LOCALAPPDATA%\Temp\nylon\cache\catalogs-v1\<iso-sha256>`; subsequent indexed runs reuse
+it without media extraction or payload application. Missing tools leave `NOT_EXPOSED`;
+query/parse/sidecar-integrity failures remain explicit. An optional cache-publication
+failure does not discard a successfully observed original catalog from the audit.
+No payload reapplication or in-place image-cache upgrade occurs merely to add metadata. Source-media
+collection remains `PARTIAL`: setup/boot inventory and original per-file metadata are
+not yet collected. Catalog interpretation is not whole-image coverage.
+
+Registry discovery now consumes that inventory rather than recursively walking image
+directories again. Every file-header probe and stock-hive query is accounted in
+`registry_sources`; parsed hives link to filesystem entries using image-relative paths.
+SAM/SECURITY payloads are not opened, user/arbitrary discovered hives are omitted by
+default pending a reviewed policy, and sensitive-name omissions are recorded in
+`registry_omissions` without retained raw value bytes. This conservative label policy is
+not proof that arbitrary configuration is secret-free or that a portable export is safe.
+Malformed/dirty/missing hives no longer erase unrelated collected evidence. Successful
+publication can therefore be a `PARTIAL` audit with explicit collector gaps; it is not
+whole-image completion. Raw staging uses rollback journaling to isolate failed hives.
+
+After `build.cmd`, `test-foundation.cmd` runs deterministic namespace and registry fixtures.
+`test-scan.cmd` checks command-line errors, registry-accounting query failures, staging
+publication failure/retry, schema v7 integrity and unchanged synthetic source payloads.
+The Python fixture scripts require Python 3. An optional comparison against a saved
+pre-refactor executable is available with `python tests/scan.py --baseline <nylon.exe>`.
+It compares console output, schema and every table, normalizing audit IDs, run timestamps
+and filesystem access times that can change between reads.
+`test-catalog.cmd` exercises catalog retention/accounting, parser limits and synthetic
+cold/warm/recovery/concurrent cache paths; synthetic tool fixtures are not real ISO/WIM validation.
+
+`test-references.cmd` validates the reusable `offline-reference-v1` boundary for future
+domain collectors: explicit offline roots/bases, literal paths/quoted targets and
+inventory-only file lookup. Unknown drive/environment mappings, unquoted command
+ambiguity, parent traversal, reparses and incomplete namespace ancestry stay unresolved;
+host search paths/environment are never used. This helper does not implement the pending
+service/task/driver collectors. Publication also checks readable/comparison paths against
+their original UTF-16 identities before downstream indexed lookups can rely on them.
+
+The services migration now records offline SYSTEM control-set candidates and typed
+`Select\Current`, `Default` and `LastKnownGood` query evidence in `service_control*`
+tables. All raw matches stay linked; a missing/failed hive is not interpreted as absent
+service configuration, and `CurrentControlSet` is never assumed. Standard positive
+`ControlSetNNN`/DWORD selections are supported; other forms remain explicit unsupported
+or unresolved evidence. `test-controlsets.cmd` checks this boundary and its corruption
+gate. `service_namespaces`, `service_roots`, `service_definitions` and
+`service_inventory_*` now account for every direct service candidate and its complete
+raw subtree in all discovered control sets, including malformed candidates, duplicate
+names/roots and redacted omissions. `PRESENT` here means raw presence, not a valid
+service or interpreted configuration. `service_value_decodings` and ordered
+`service_value_strings` retain strict, bounded DWORD/string/multi-string decoding with
+raw value provenance. Unsupported types/binary structures, malformed termination and
+encoding, and values over the explicit 2 MiB parser limit remain accounted gaps; raw
+bytes stay available. Environment variables are not expanded against the host.
+Services remains `PARTIAL`: field-specific configuration, svchost and dependency
+interpretation are pending. Existing audits need a fresh scan for schema v7.
+
+## Source organization
+
+The first scanner reorganization keeps command-line parsing and process exit handling
+in `src/main.cpp`. `src/scan/scan.cpp` owns the visible scan sequence;
+`src/scan/database.cpp` owns its database preparation, registry completion check and
+verified publication. Existing collectors and media/platform code keep their current
+paths until a focused follow-up moves them. This is structural work after M9, not M10.
+The approved source areas and mandatory Skeet coding rules are recorded in `AGENTS.md`.
 
 ## Build
 
@@ -60,6 +142,16 @@ The first run creates/resumes `image.map.db`, opens the local browser viewer imm
 The source `image.db` is never modified. `image.map.db` is a derived, reproducible semantic representation and records source references back to the audit evidence. Work is partitioned into bounded units, validated before commit, and resumable. Known Windows structures are normalized deterministically where possible; the local model is used for bounded semantic lifting rather than whole-image chat or threat scoring.
 
 The current semantic pipeline is registry-focused. Its source-accounting invariant covers imported registry keys/values; that must not be described as full Windows-image semantic coverage.
+
+The active semantic tools bind maps to streaming SHA-256 of the finalized raw database,
+not its path/size/timestamp. They hold a stable raw-file read lock, refuse nonempty raw
+WAL/journal sidecars, and the standalone classifier/linker reject mismatched maps before
+updates. Byte-identical relocated audits retain their binding. Changed raw contents
+invalidate the runtime's derived map; raw evidence is never rewritten. Schema v4 audit
+IDs are also recorded in map metadata. Legacy audits containing sensitive/unreviewed
+hives are refused; re-scan them with the current omission policy. This is not universal
+secret detection or a safe-export guarantee. The transitional browser viewer still lacks
+this identity gate and must not be used as proof of compatible whole-image coverage.
 
 In the current viewer, choose **Progress** to see the mapping pass as a dense work field. Each square is a semantic work unit:
 

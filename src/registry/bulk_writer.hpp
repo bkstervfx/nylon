@@ -69,6 +69,7 @@ public:
 	}
 
 	status_t flush();
+	void discard_pending() noexcept;
 	status_t finalize();
 
 private:

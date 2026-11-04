@@ -1,6 +1,7 @@
 #define wmain nylon_preclassify_v1_wmain
 #include "preclassify.cpp"
 #undef wmain
+#include "source_binding.hpp"
 
 int wmain(int argc, wchar_t** argv)
 {
@@ -11,8 +12,11 @@ int wmain(int argc, wchar_t** argv)
         const std::filesystem::path source_path(argv[1]);
         const std::filesystem::path map_path = argc == 3 ? std::filesystem::path(argv[2]) : map_path_for(source_path);
 
+        auto source_lock = nylon::semantic_binding::lock_source(source_path);
         auto source = database_t::open(source_path, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX);
+        nylon::semantic_binding::require_registry_policy(source.get());
         auto map = database_t::open(map_path, SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX);
+        nylon::semantic_binding::require_map_binding(map.get(), source_path);
         exec(source.get(), "PRAGMA query_only=ON; PRAGMA temp_store=MEMORY;");
         exec(map.get(), "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA temp_store=MEMORY;");
 
